@@ -3,3 +3,4 @@ gunicorn
 pandas
 openpyxl
 werkzeug
+psycopg2-binary
