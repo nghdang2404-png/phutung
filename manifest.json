@@ -1,0 +1,15 @@
+{
+  "name": "Nam Sương Motor PO",
+  "short_name": "Nam Sương",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6f9",
+  "theme_color": "#dc3545",
+  "icons": [
+    {
+      "src": "/static/logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}
