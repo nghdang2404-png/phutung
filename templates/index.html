@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hệ Thống Đối Soát Mã Phụ Tùng PO - Nam Sương Motor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    
+    <!-- SheetJS, Chart.js và Bootstrap JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <style>
+    @font-face {
+        font-family: 'SVN-MonaSans';
+        src: url("{{ url_for('static', filename='fonts/SVN-MonaSans-SemiBoldWide.otf') }}") format('opentype');
+        font-weight: normal;
+        font-style: normal;
+    }
+    :root { 
+        --bs-body-bg: #f4f6f9; 
+        --bs-body-font-family: 'SVN-MonaSans', sans-serif; 
+        --ns-red: #dc3545;
+        --ns-dark: #1e293b;
+    }
+    body { background-color: var(--bs-body-bg); color: var(--ns-dark); font-family: var(--bs-body-font-family); }
+    
+    /* Brand Header Banner - Thiết kế cân đối, nhã nhặn nền trắng viền đỏ */
+    .brand-banner {
+        background: #ffffff;
+        color: var(--ns-dark);
+        border-radius: 12px;
+        padding: 1.25rem 2rem;
+        margin-bottom: 1.5rem;
+        border: 1px solid #e2e8f0;
+        border-left: 5px solid var(--ns-red);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+    }
+    .header-logo {
+        height: 42px;
+        object-fit: contain;
+        background: #f8fafc;
+        padding: 4px 10px;
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
+    }
+
+    .card-custom { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04); background: #ffffff; }
+    .stat-card.stat-total { border-left: 5px solid #6c757d; }
+    .stat-card.stat-debt { border-left: 5px solid #dc3545; }
+    .stat-card.stat-shipping { border-left: 5px solid #fd7e14; }
+    .stat-card.stat-received { border-left: 5px solid #198754; }
+    
+    .stat-icon { width: 48px; height: 48px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; }
+    
+    .nav-pills .nav-link { border-radius: 8px; font-weight: 600; padding: 10px 20px; color: #64748b; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); transition: all 0.2s; }
+    .nav-pills .nav-link.active { background-color: #dc3545 !important; color: white !important; box-shadow: 0 4px 12px rgba(220, 53, 69, 0.3); }
+    .nav-pills .nav-link:hover:not(.active) { color: #dc3545; background: #fff5f5; }
+
+    .drop-zone { border: 2px dashed #cbd5e1; border-radius: 12px; padding: 2rem 1.5rem; text-align: center; background: #f8fafc; cursor: pointer; position: relative; transition: all 0.2s; }
+    .drop-zone:hover { border-color: #dc3545; background: #fff5f5; }
+    
+    .badge-status { padding: 6px 12px; font-weight: 600; border-radius: 20px; font-size: 0.825rem; }
+    .badge-debt { background-color: #ffebe9; color: #cf222e; border: 1px solid rgba(207,34,46,0.2); }
+    .badge-shipping { background-color: #fff8c5; color: #9a6700; border: 1px solid rgba(154,103,0,0.2); }
+    .badge-received { background-color: #dafbe1; color: #1a7f37; border: 1px solid rgba(26,127,55,0.2); }
+    
+    .table-responsive { max-height: 550px; overflow-y: auto; }
+    .table thead th { position: sticky; top: 0; background-color: #f8fafc; z-index: 10; font-size: 0.75rem; text-transform: uppercase; color: #64748b; }
+    .part-code { font-family: monospace; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; font-weight: 600; color: #334155; }
+    
+    #loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); backdrop-filter: blur(4px); z-index: 9999; align-items: center; justify-content: center; flex-direction: column; }
+</style>
+</head>
+<body>
+
+<div id="loading-overlay">
+    <div class="spinner-border text-danger mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+    <h5 class="fw-bold text-dark">Đang xử lý và đối soát dữ liệu Nam Sương...</h5>
+</div>
+
+<div class="container-fluid px-4 py-4" style="max-width: 1400px;">
+    
+    <!-- Nam Sương Branded Header Banner -->
+<div class="brand-banner d-flex align-items-center justify-content-between flex-wrap gap-3">
+    <div class="d-flex align-items-center gap-3">
+        <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo Nam Sương" class="header-logo shadow-sm">
+        <div>
+            <div class="d-flex align-items-center gap-2 mb-1">
+                <span class="badge bg-danger bg-opacity-10 text-danger fw-bold px-2 py-1 small">NAM SƯƠNG MOTOR</span>
+                <span class="text-muted small">| Hệ thống nội bộ</span>
+            </div>
+            <h4 class="fw-bold mb-0 text-dark">
+                Hệ Thống Đối Soát Mã Phụ Tùng PO
+            </h4>
+        </div>
+    </div>
+    <div class="d-flex align-items-center gap-3">
+        <span class="badge bg-light text-dark shadow-sm px-3 py-2 border rounded-pill">
+            <i class="bi bi-person-circle text-danger me-1"></i> User: <strong>{{ user }}</strong> 
+            <span class="badge bg-danger ms-2">{{ store_code }}</span>
+        </span>
+        <a href="/logout" class="btn btn-outline-danger btn-sm fw-semibold shadow-sm"><i class="bi bi-box-arrow-right me-1"></i> Đăng xuất</a>
+    </div>
+</div>s
+
+    <!-- Navigation Tabs -->
+    <ul class="nav nav-pills mb-4 gap-2" id="mainTab" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="report-tab" data-bs-toggle="pill" data-bs-target="#report-pane" onclick="loadData()">
+                <i class="bi bi-bar-chart-fill me-2"></i>Dashboard & Kết Quả
+            </button>
+        </li>
+        {% if role == 'store' %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="import-tab" data-bs-toggle="pill" data-bs-target="#import-pane">
+                <i class="bi bi-cloud-arrow-up me-2"></i>Tải Lên File Mới
+            </button>
+        </li>
+        {% endif %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="history-tab" data-bs-toggle="pill" data-bs-target="#history-pane" onclick="loadHistory()">
+                <i class="bi bi-clock-history me-2"></i>Lịch Sử Tải Lên
+            </button>
+        </li>
+        {% if role == 'admin' %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="admin-tab" data-bs-toggle="pill" data-bs-target="#admin-pane" onclick="loadAdminUsers()">
+                <i class="bi bi-gear-fill me-2"></i>Quản Lý User & Mật Khẩu
+            </button>
+        </li>
+        {% endif %}
+    </ul>
+
+    <div class="tab-content" id="mainTabContent">
+        
+        <!-- DASHBOARD & REPORT PANE -->
+        <div class="tab-pane fade show active" id="report-pane">
+            
+            {% if role == 'admin' %}
+            <div class="card card-custom p-3 mb-4">
+                <div class="row align-items-center">
+                    <div class="col-md-4">
+                        <label class="form-label fw-semibold small mb-1 text-secondary">Chọn Cửa Hàng Xem Báo Cáo:</label>
+                        <select id="admin-store-filter" class="form-select border-danger-subtle" onchange="loadData()">
+                            <option value="ALL">🌐 Tất Cả Cửa Hàng Nam Sương (Gộp)</option>
+                            <option value="NS1">Cửa hàng NS1</option>
+                            <option value="NS2">Cửa hàng NS2</option>
+                            <option value="NS3">Cửa hàng NS3</option>
+                            <option value="NS4">Cửa hàng NS4</option>
+                            <option value="NS5">Cửa hàng NS5</option>
+                            <option value="NSM1">Cửa hàng NSM1</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="alert alert-danger py-2 px-3 mb-4 d-flex align-items-center justify-content-between shadow-sm border-0 bg-white" style="border-left: 5px solid #dc3545 !important; border-radius: 10px;">
+                <div class="d-flex align-items-center">
+                    <i class="bi bi-calendar-range text-danger fs-4 me-3"></i>
+                    <div>
+                        <span class="text-muted small d-block">Phạm vi thời gian đơn đặt hàng (PO) trong báo cáo:</span>
+                        <strong class="text-dark">Từ ngày <span id="report-min-date">--/--/----</span> đến ngày <span id="report-max-date">--/--/----</span></strong>
+                    </div>
+                </div>
+                <span class="badge bg-danger bg-opacity-10 text-danger px-3 py-2 rounded-pill small">Dữ liệu tự động quét</span>
+            </div>
+
+            <!-- Stat Cards -->
+            <div class="row g-3 mb-4">
+                <div class="col-xl-3 col-sm-6">
+                    <div class="card card-custom p-3 stat-card stat-total">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-muted small fw-semibold text-uppercase">Tổng Mã Hàng</span>
+                                <h3 class="fw-bold mb-0 mt-1" id="stat-total">0</h3>
+                            </div>
+                            <div class="stat-icon bg-secondary bg-opacity-10 text-secondary"><i class="bi bi-archive-fill"></i></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-sm-6">
+                    <div class="card card-custom p-3 stat-card stat-debt">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-muted small fw-semibold text-uppercase text-danger">Đang Nợ Hàng</span>
+                                <h3 class="fw-bold text-danger mb-0 mt-1" id="stat-debt">0</h3>
+                            </div>
+                            <div class="stat-icon bg-danger bg-opacity-10 text-danger"><i class="bi bi-exclamation-triangle-fill"></i></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-sm-6">
+                    <div class="card card-custom p-3 stat-card stat-shipping">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-muted small fw-semibold text-uppercase text-warning">Đang Vận Chuyển</span>
+                                <h3 class="fw-bold text-warning mb-0 mt-1" id="stat-shipping">0</h3>
+                            </div>
+                            <div class="stat-icon bg-warning bg-opacity-10 text-warning"><i class="bi bi-truck"></i></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-sm-6">
+                    <div class="card card-custom p-3 stat-card stat-received">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <div>
+                                <span class="text-muted small fw-semibold text-uppercase text-success">Đã Nhận Hàng</span>
+                                <h3 class="fw-bold text-success mb-0 mt-1" id="stat-received">0</h3>
+                            </div>
+                            <div class="stat-icon bg-success bg-opacity-10 text-success"><i class="bi bi-check-circle-fill"></i></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="row g-4 mb-4">
+                <div class="col-lg-8">
+                    <div class="card card-custom p-4 h-100">
+                        <h6 class="fw-bold mb-3"><i class="bi bi-bar-chart-line text-danger me-2"></i>Biểu Đồ Phân Phối Trạng Thái Phụ Tùng</h6>
+                        <div style="height: 280px;"><canvas id="statusChart"></canvas></div>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="card card-custom p-4 h-100">
+                        <h6 class="fw-bold mb-3"><i class="bi bi-pie-chart-fill text-danger me-2"></i>Tỷ Lệ Tình Trạng</h6>
+                        <div style="height: 280px;"><canvas id="pieChart"></canvas></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Table & Search Toolbar -->
+            <div class="card card-custom p-4">
+                <div class="row g-3 align-items-center justify-content-between mb-3">
+                    <div class="col-md-7 d-flex gap-2">
+                        <div class="input-group">
+                            <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+                            <input type="text" id="search-input" class="form-control border-start-0 ps-0" placeholder="Tìm theo Mã PO hoặc Mã phụ tùng..." oninput="filterData()">
+                        </div>
+                        <select id="filter-status" class="form-select w-auto" onchange="filterData()">
+                            <option value="">Tất cả trạng thái</option>
+                            <option value="Nợ">Nợ</option>
+                            <option value="Đang vận chuyển">Đang vận chuyển</option>
+                            <option value="Đã nhận hàng">Đã nhận hàng</option>
+                        </select>
+                    </div>
+                    <div class="col-md-5 d-flex justify-content-md-end align-items-center gap-3">
+                        <span class="text-muted small">Hiển thị <strong id="visible-count" class="text-dark">0</strong> mã</span>
+                        <button class="btn btn-outline-success btn-sm" onclick="exportToExcel()"><i class="bi bi-file-earmark-excel me-1"></i> Xuất Excel</button>
+                    </div>
+                </div>
+
+                <div class="table-responsive border rounded-3">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th class="text-center" style="width: 50px;">STT</th>
+                                {% if role == 'admin' %}<th>Cửa Hàng</th>{% endif %}
+                                <th>Mã PO</th>
+                                <th>Ngày Đặt</th>
+                                <th>Mã Phụ Tùng</th>
+                                <th class="text-center">Trạng Thái</th>
+                                <th class="text-end">Số Ngày</th>
+                            </tr>
+                        </thead>
+                        <tbody id="result-body">
+                            <tr><td colspan="7" class="text-center py-5 text-muted">Đang tải dữ liệu...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        {% if role == 'store' %}
+        <!-- IMPORT PANE -->
+        <div class="tab-pane fade" id="import-pane">
+            <form id="upload-form">
+                <div class="row g-4">
+                    <div class="col-lg-4">
+                        <div class="card card-custom h-100 p-4">
+                            <h6 class="fw-bold mb-3"><i class="bi bi-file-earmark-spreadsheet text-danger me-2"></i>1. File Danh Sách PO</h6>
+                            <div class="drop-zone" onclick="document.getElementById('ds_po_file').click()">
+                                <i class="bi bi-cloud-arrow-up display-5 text-danger mb-2"></i>
+                                <p class="text-muted small mb-0">Kéo thả file hoặc nhấp chọn</p>
+                                <div class="file-name text-danger fw-semibold mt-2 small" id="ds-po-file-name"></div>
+                                <input type="file" id="ds_po_file" accept=".xlsx, .xls, .csv" style="display: none;" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="card card-custom h-100 p-4">
+                            <h6 class="fw-bold mb-3"><i class="bi bi-list-check text-warning me-2"></i>2. File Chi Tiết PO</h6>
+                            <div class="drop-zone" onclick="document.getElementById('po_detail_file').click()">
+                                <i class="bi bi-cloud-arrow-up display-5 text-warning mb-2"></i>
+                                <p class="text-muted small mb-0">Kéo thả file hoặc nhấp chọn</p>
+                                <div class="file-name text-warning fw-semibold mt-2 small" id="po-detail-file-name"></div>
+                                <input type="file" id="po_detail_file" accept=".xlsx, .xls, .csv" style="display: none;" required>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-4">
+                        <div class="card card-custom h-100 p-4">
+                            <h6 class="fw-bold mb-3"><i class="bi bi-box-seam text-success me-2"></i>3. File Chi Tiết Nhận Hàng</h6>
+                            <div class="drop-zone" onclick="document.getElementById('receipt_file').click()">
+                                <i class="bi bi-cloud-arrow-up display-5 text-success mb-2"></i>
+                                <p class="text-muted small mb-0">Kéo thả file hoặc nhấp chọn</p>
+                                <div class="file-name text-success fw-semibold mt-2 small" id="receipt-file-name"></div>
+                                <input type="file" id="receipt_file" accept=".xlsx, .xls, .csv" style="display: none;" required>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-4 text-end">
+                    <button type="submit" class="btn btn-danger btn-lg px-5 shadow-sm fw-semibold" style="background-color: #dc3545;">
+                        <i class="bi bi-cpu me-2"></i> Tải Lên & Đối Soát Ngay
+                    </button>
+                </div>
+            </form>
+        </div>
+        {% endif %}
+
+        <!-- HISTORY PANE -->
+        <div class="tab-pane fade" id="history-pane">
+            <div class="card card-custom p-4">
+                <h5 class="fw-bold mb-3"><i class="bi bi-clock-history me-2 text-danger"></i>Lịch Sử Các Lần Tải Lên Dữ Liệu</h5>
+                <div class="table-responsive border rounded-3">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th class="text-center">ID</th>
+                                <th>Cửa Hàng</th>
+                                <th>Thời Gian Tải Lên</th>
+                                <th>File Danh Sách PO</th>
+                                <th>File Chi Tiết PO</th>
+                                <th>File Nhận Hàng</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-body">
+                            <tr><td colspan="6" class="text-center py-4 text-muted">Đang tải lịch sử...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        {% if role == 'admin' %}
+        <!-- ADMIN PANE -->
+        <div class="tab-pane fade" id="admin-pane">
+            <div class="card card-custom p-4">
+                <h5 class="fw-bold mb-3"><i class="bi bi-people-fill me-2 text-danger"></i>Quản Lý Tài Khoản & Mật Khẩu User Cửa Hàng</h5>
+                <div class="table-responsive border rounded-3">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Tên Đăng Nhập</th>
+                                <th>Quyền (Role)</th>
+                                <th>Cửa Hàng Quản Lý</th>
+                                <th class="text-end">Thao Tác Đổi Mật Khẩu</th>
+                            </tr>
+                        </thead>
+                        <tbody id="admin-users-body">
+                            <tr><td colspan="4" class="text-center py-4 text-muted">Đang tải danh sách user...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+    </div>
+</div>
+
+<!-- Modal Đổi Mật Khẩu -->
+<div class="modal fade" id="changePassModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title fw-bold">Đổi Mật Khẩu Cho User: <span id="modal-username"></span></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-4">
+                <input type="hidden" id="target-username">
+                <div class="mb-3">
+                    <label class="form-label fw-semibold small">Mật khẩu mới</label>
+                    <input type="password" id="new-password-input" class="form-control" placeholder="Nhập mật khẩu mới...">
+                </div>
+                <button type="button" class="btn btn-danger w-100 fw-semibold" onclick="submitNewPassword()">Xác Nhận Đổi Mật Khẩu</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let globalData = [];
+    let statusChartInstance = null;
+    let pieChartInstance = null;
+
+    document.addEventListener("DOMContentLoaded", () => {
+        loadData();
+        setupDragZones();
+    });
+
+    async function loadData() {
+        const store = document.getElementById('admin-store-filter') ? document.getElementById('admin-store-filter').value : '';
+        try {
+            const res = await fetch(`/api/data?store=${store}`);
+            const result = await res.json();
+            if(result.success) {
+                globalData = result.data;
+                updateSummary(result.summary);
+                renderTable(globalData);
+                renderCharts(result.summary);
+            }
+        } catch(e) { console.error(e); }
+    }
+
+    function updateSummary(summary) {
+        document.getElementById('stat-total').innerText = summary.total.toLocaleString();
+        document.getElementById('stat-debt').innerText = summary.debt.toLocaleString();
+        document.getElementById('stat-shipping').innerText = summary.shipping.toLocaleString();
+        document.getElementById('stat-received').innerText = summary.received.toLocaleString();
+        
+        document.getElementById('report-min-date').innerText = summary.min_date || 'N/A';
+        document.getElementById('report-max-date').innerText = summary.max_date || 'N/A';
+    }
+
+    function renderTable(data) {
+    const tbody = document.getElementById('result-body');
+    document.getElementById('visible-count').innerText = data.length.toLocaleString();
+    const isAdmin = document.getElementById('admin-store-filter') !== null;
+
+    if (data.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-muted">Không có dữ liệu.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = data.map((item, index) => {
+        let badgeClass = item.status === 'Nợ' ? 'badge-debt' : (item.status === 'Đang vận chuyển' ? 'badge-shipping' : 'badge-received');
+        
+        // Kiểm tra nếu không có ngày đặt hoặc là N/A thì hiển thị "Cần bổ sung" màu đỏ
+        let orderDateHtml = (!item.order_date || item.order_date === 'N/A' || item.order_date === '') 
+            ? `<span class="text-danger fw-semibold">Cần bổ sung</span>` 
+            : `<span class="text-muted">${item.order_date}</span>`;
+
+        return `
+            <tr>
+                <td class="text-center text-muted small">${index + 1}</td>
+                ${isAdmin ? `<td><span class="badge bg-light text-dark border">${item.store_code || 'N/A'}</span></td>` : ''}
+                <td><strong>${item.po_code}</strong></td>
+                <td>${orderDateHtml}</td>
+                <td><span class="part-code">${item.part_code}</span></td>
+                <td class="text-center"><span class="badge-status ${badgeClass}">${item.status}</span></td>
+                <td class="text-end fw-bold ${item.status === 'Nợ' ? 'text-danger' : (item.status === 'Đang vận chuyển' ? 'text-warning' : 'text-muted')}">
+                    ${item.status !== 'Đã nhận hàng' ? `${item.days_debt} ngày` : '-'}
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+    function filterData() {
+        const search = document.getElementById('search-input').value.toLowerCase();
+        const status = document.getElementById('filter-status').value;
+        const filtered = globalData.filter(item => {
+            return (item.po_code.toLowerCase().includes(search) || item.part_code.toLowerCase().includes(search)) && 
+                   (status === '' || item.status === status);
+        });
+        renderTable(filtered);
+    }
+
+    function renderCharts(summary) {
+        const ctxBar = document.getElementById('statusChart').getContext('2d');
+        const ctxPie = document.getElementById('pieChart').getContext('2d');
+
+        if (statusChartInstance) statusChartInstance.destroy();
+        if (pieChartInstance) pieChartInstance.destroy();
+
+        statusChartInstance = new Chart(ctxBar, {
+            type: 'bar',
+            data: {
+                labels: ['Nợ Hàng', 'Đang Vận Chuyển', 'Đã Nhận Hàng'],
+                datasets: [{
+                    label: 'Số lượng mã',
+                    data: [summary.debt, summary.shipping, summary.received],
+                    backgroundColor: ['#dc3545', '#fd7e14', '#198754'],
+                    borderRadius: 8
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        });
+
+        pieChartInstance = new Chart(ctxPie, {
+            type: 'doughnut',
+            data: {
+                labels: ['Nợ', 'Vận chuyển', 'Đã nhận'],
+                datasets: [{
+                    data: [summary.debt, summary.shipping, summary.received],
+                    backgroundColor: ['#dc3545', '#fd7e14', '#198754']
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+    }
+
+    const uploadForm = document.getElementById('upload-form');
+    if(uploadForm) {
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData();
+            formData.append('ds_po_file', document.getElementById('ds_po_file').files[0]);
+            formData.append('po_detail_file', document.getElementById('po_detail_file').files[0]);
+            formData.append('receipt_file', document.getElementById('receipt_file').files[0]);
+
+            document.getElementById('loading-overlay').style.display = 'flex';
+            try {
+                const res = await fetch('/api/upload', { method: 'POST', body: formData });
+                const result = await res.json();
+                if(res.ok) {
+                    alert('Tải lên và đối soát thành công!');
+                    loadData();
+                    new bootstrap.Tab(document.getElementById('report-tab')).show();
+                } else { alert('Lỗi: ' + result.error); }
+            } catch(e) { alert('Lỗi kết nối server.'); }
+            finally { document.getElementById('loading-overlay').style.display = 'none'; }
+        });
+    }
+
+    async function loadHistory() {
+        const res = await fetch('/api/history');
+        const result = await res.json();
+        const tbody = document.getElementById('history-body');
+        if(result.success && result.history.length > 0) {
+            tbody.innerHTML = result.history.map(h => `
+                <tr>
+                    <td class="text-center text-muted small">${h.id}</td>
+                    <td><span class="badge bg-secondary">${h.store_code}</span></td>
+                    <td class="fw-semibold">${h.upload_time}</td>
+                    <td class="small text-danger">${h.ds_po_filename}</td>
+                    <td class="small text-warning">${h.po_detail_filename}</td>
+                    <td class="small text-success">${h.receipt_filename}</td>
+                </tr>
+            `).join('');
+        } else {
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-muted">Chưa có lịch sử tải lên.</td></tr>`;
+        }
+    }
+
+    async function loadAdminUsers() {
+        const res = await fetch('/api/admin/users');
+        const result = await res.json();
+        const tbody = document.getElementById('admin-users-body');
+        if(result.success) {
+            tbody.innerHTML = result.users.map(u => `
+                <tr>
+                    <td class="fw-bold">${u.username}</td>
+                    <td><span class="badge ${u.role === 'admin' ? 'bg-danger' : 'bg-primary'}">${u.role}</span></td>
+                    <td>${u.store_code}</td>
+                    <td class="text-end">
+                        <button class="btn btn-outline-danger btn-sm" onclick="openPassModal('${u.username}')">
+                            <i class="bi bi-key me-1"></i> Đổi Mật Khẩu
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+    }
+
+    function openPassModal(username) {
+        document.getElementById('target-username').value = username;
+        document.getElementById('modal-username').innerText = username;
+        document.getElementById('new-password-input').value = '';
+        new bootstrap.Modal(document.getElementById('changePassModal')).show();
+    }
+
+    async function submitNewPassword() {
+        const username = document.getElementById('target-username').value;
+        const password = document.getElementById('new-password-input').value;
+        if(!password) { alert('Vui lòng nhập mật khẩu mới'); return; }
+
+        const res = await fetch('/api/admin/users', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username, password})
+        });
+        const result = await res.json();
+        if(result.ok || result.success) {
+            alert('Đổi mật khẩu thành công!');
+            bootstrap.Modal.getInstance(document.getElementById('changePassModal')).hide();
+        } else { alert('Lỗi đổi mật khẩu'); }
+    }
+
+    function setupDragZones() {
+        const fileInputs = [
+            { id: 'ds_po_file', nameId: 'ds-po-file-name' },
+            { id: 'po_detail_file', nameId: 'po-detail-file-name' },
+            { id: 'receipt_file', nameId: 'receipt-file-name' }
+        ];
+
+        fileInputs.forEach(item => {
+            const input = document.getElementById(item.id);
+            const nameDisplay = document.getElementById(item.nameId);
+            const dropZone = input.closest('.drop-zone');
+            if(!input || !nameDisplay || !dropZone) return;
+
+            input.addEventListener('change', () => {
+                if(input.files.length > 0) {
+                    nameDisplay.innerText = "✓ " + input.files[0].name;
+                }
+            });
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    dropZone.classList.add('border-danger', 'bg-light');
+                });
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    dropZone.classList.remove('border-danger', 'bg-light');
+                });
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    const dt = new DataTransfer();
+                    dt.items.add(e.dataTransfer.files[0]);
+                    input.files = dt.files;
+                    nameDisplay.innerText = "✓ " + input.files[0].name;
+                }
+            });
+        });
+    }
+
+    function exportToExcel() {
+        if(globalData.length === 0) { alert("Không có dữ liệu!"); return; }
+        const ws = XLSX.utils.json_to_sheet(globalData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "DoiSoat");
+        XLSX.writeFile(wb, `Bao_Cao_PO_NamSuong_${new Date().toISOString().slice(0,10)}.xlsx`);
+    }
+</script>
+</body>
+</html>
