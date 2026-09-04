@@ -16,10 +16,11 @@
         body { 
             background: #f4f6f9; 
             font-family: 'SVN-MonaSans', sans-serif; 
-            height: 100vh; 
+            min-height: 100vh; 
             display: flex; 
             align-items: center; 
             justify-content: center; 
+            padding: 1rem;
         }
         .login-card { 
             width: 100%; 
@@ -28,21 +29,27 @@
             border-radius: 16px; 
             box-shadow: 0 10px 30px rgba(220,53,69,0.08); 
             background: #fff; 
-            padding: 2.5rem; 
+            padding: 2rem; 
             border-top: 5px solid #dc3545; 
         }
         .btn-nam-suong { background-color: #dc3545; border-color: #dc3545; color: #fff; }
         .btn-nam-suong:hover { background-color: #bb2d3b; border-color: #b02a37; color: #fff; }
-        .brand-logo { max-height: 60px; object-fit: contain; }
+        .brand-logo { max-height: 55px; object-fit: contain; }
+
+        @media (max-width: 576px) {
+            .login-card {
+                padding: 1.5rem;
+                border-radius: 12px;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="login-card">
         <div class="text-center mb-4">
-            <!-- Hiển thị Logo từ thư mục static -->
-            <img src="{{ url_for('static', filename='logo.png') }}" alt="Nam Sương Motor Logo" class="brand-logo mb-3">
-            <h4 class="fw-bold text-dark mb-1">NAM SƯƠNG MOTOR</h4>
-            <p class="text-muted small">Hệ Thống Đối Soát Mã Phụ Tùng PO</p>
+            <img src="{{ url_for('static', filename='logo.png') }}" alt="Nam Sương Motor Logo" class="brand-logo mb-2">
+            <h4 class="fw-bold text-dark mb-1 fs-5">NAM SƯƠNG MOTOR</h4>
+            <p class="text-muted small mb-0">Hệ Thống Đối Soát Mã Phụ Tùng PO</p>
         </div>
 
         {% if error %}
@@ -54,7 +61,7 @@
                 <label class="form-label fw-semibold small text-secondary">Tên đăng nhập</label>
                 <div class="input-group">
                     <span class="input-group-text bg-light border-end-0"><i class="bi bi-person text-muted"></i></span>
-                    <input type="text" name="username" class="form-control border-start-0 bg-light" placeholder="Ví dụ: NS1 hoặc admin" required>
+                    <input type="text" name="username" class="form-control border-start-0 bg-light" placeholder="Nhập tên đăng nhập" required>
                 </div>
             </div>
             <div class="mb-4">
@@ -68,9 +75,6 @@
                 <i class="bi bi-box-arrow-in-right me-2"></i> Đăng Nhập Hệ Thống
             </button>
         </form>
-        <div class="text-center mt-4 text-muted small">
-            Hỗ trợ cửa hàng NS1-NS5, NSM1 & Admin tổng hợp.
-        </div>
     </div>
 </body>
 </html>

@@ -27,7 +27,7 @@
     }
     body { background-color: var(--bs-body-bg); color: var(--ns-dark); font-family: var(--bs-body-font-family); }
     
-    /* Brand Header Banner - Thiết kế cân đối, nhã nhặn nền trắng viền đỏ */
+    /* Brand Header Banner - Responsive cho điện thoại */
     .brand-banner {
         background: #ffffff;
         color: var(--ns-dark);
@@ -39,10 +39,10 @@
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
     }
     .header-logo {
-        height: 42px;
+        height: 38px;
         object-fit: contain;
         background: #f8fafc;
-        padding: 4px 10px;
+        padding: 4px 8px;
         border-radius: 8px;
         border: 1px solid #e2e8f0;
     }
@@ -53,61 +53,70 @@
     .stat-card.stat-shipping { border-left: 5px solid #fd7e14; }
     .stat-card.stat-received { border-left: 5px solid #198754; }
     
-    .stat-icon { width: 48px; height: 48px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; }
+    .stat-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.3rem; }
     
-    .nav-pills .nav-link { border-radius: 8px; font-weight: 600; padding: 10px 20px; color: #64748b; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); transition: all 0.2s; }
+    .nav-pills .nav-link { border-radius: 8px; font-weight: 600; padding: 10px 16px; color: #64748b; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); transition: all 0.2s; white-space: nowrap; }
     .nav-pills .nav-link.active { background-color: #dc3545 !important; color: white !important; box-shadow: 0 4px 12px rgba(220, 53, 69, 0.3); }
     .nav-pills .nav-link:hover:not(.active) { color: #dc3545; background: #fff5f5; }
 
-    .drop-zone { border: 2px dashed #cbd5e1; border-radius: 12px; padding: 2rem 1.5rem; text-align: center; background: #f8fafc; cursor: pointer; position: relative; transition: all 0.2s; }
+    .drop-zone { border: 2px dashed #cbd5e1; border-radius: 12px; padding: 1.5rem 1rem; text-align: center; background: #f8fafc; cursor: pointer; position: relative; transition: all 0.2s; }
     .drop-zone:hover { border-color: #dc3545; background: #fff5f5; }
     
-    .badge-status { padding: 6px 12px; font-weight: 600; border-radius: 20px; font-size: 0.825rem; }
+    .badge-status { padding: 5px 10px; font-weight: 600; border-radius: 20px; font-size: 0.78rem; white-space: nowrap; }
     .badge-debt { background-color: #ffebe9; color: #cf222e; border: 1px solid rgba(207,34,46,0.2); }
     .badge-shipping { background-color: #fff8c5; color: #9a6700; border: 1px solid rgba(154,103,0,0.2); }
     .badge-received { background-color: #dafbe1; color: #1a7f37; border: 1px solid rgba(26,127,55,0.2); }
     
-    .table-responsive { max-height: 550px; overflow-y: auto; }
-    .table thead th { position: sticky; top: 0; background-color: #f8fafc; z-index: 10; font-size: 0.75rem; text-transform: uppercase; color: #64748b; }
-    .part-code { font-family: monospace; background: #f1f5f9; padding: 3px 8px; border-radius: 4px; font-weight: 600; color: #334155; }
+    .table-responsive { max-height: 550px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .table thead th { position: sticky; top: 0; background-color: #f8fafc; z-index: 10; font-size: 0.75rem; text-transform: uppercase; color: #64748b; white-space: nowrap; }
+    .part-code { font-family: monospace; background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-weight: 600; color: #334155; font-size: 0.85rem; }
     
     #loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); backdrop-filter: blur(4px); z-index: 9999; align-items: center; justify-content: center; flex-direction: column; }
+
+    /* Media Queries tối ưu riêng cho mobile */
+    @media (max-width: 768px) {
+        .brand-banner { padding: 1rem; }
+        .brand-banner h4 { font-size: 1.1rem; }
+        .container-fluid { padding-left: 10px !important; padding-right: 10px !important; }
+        .nav-pills { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 5px; }
+        .stat-card h3 { font-size: 1.35rem; }
+    }
 </style>
 </head>
 <body>
 
 <div id="loading-overlay">
     <div class="spinner-border text-danger mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
-    <h5 class="fw-bold text-dark">Đang xử lý và đối soát dữ liệu Nam Sương...</h5>
+    <h5 class="fw-bold text-dark text-center px-3">Đang xử lý và đối soát dữ liệu Nam Sương...</h5>
 </div>
 
-<div class="container-fluid px-4 py-4" style="max-width: 1400px;">
+<div class="container-fluid px-2 px-md-4 py-3 py-md-4" style="max-width: 1400px;">
     
     <!-- Nam Sương Branded Header Banner -->
-<div class="brand-banner d-flex align-items-center justify-content-between flex-wrap gap-3">
-    <div class="d-flex align-items-center gap-3">
-        <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo Nam Sương" class="header-logo shadow-sm">
-        <div>
-            <div class="d-flex align-items-center gap-2 mb-1">
-                <span class="badge bg-danger bg-opacity-10 text-danger fw-bold px-2 py-1 small">NAM SƯƠNG MOTOR</span>
-                <span class="text-muted small">| Hệ thống nội bộ</span>
+    <div class="brand-banner d-flex align-items-center justify-content-between flex-wrap gap-3">
+        <div class="d-flex align-items-center gap-2 gap-md-3">
+            <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo Nam Sương" class="header-logo shadow-sm">
+            <div>
+                <div class="d-flex align-items-center gap-2 mb-1">
+                    <span class="badge bg-danger bg-opacity-10 text-danger fw-bold px-2 py-1" style="font-size: 0.7rem;">NAM SƯƠNG MOTOR</span>
+                    <span class="text-muted small d-none d-sm-inline">| Hệ thống nội bộ</span>
+                </div>
+                <h4 class="fw-bold mb-0 text-dark fs-6 fs-md-4">
+                    Hệ Thống Đối Soát Mã Phụ Tùng PO
+                </h4>
             </div>
-            <h4 class="fw-bold mb-0 text-dark">
-                Hệ Thống Đối Soát Mã Phụ Tùng PO
-            </h4>
+        </div>
+        <div class="d-flex align-items-center gap-2 ms-auto ms-md-0">
+            <span class="badge bg-light text-dark shadow-sm px-2 px-md-3 py-2 border rounded-pill text-truncate" style="max-width: 200px;">
+                <i class="bi bi-person-circle text-danger me-1"></i> <strong class="d-none d-sm-inline">User: </strong>{{ user }} 
+                <span class="badge bg-danger ms-1">{{ store_code }}</span>
+            </span>
+            <a href="/logout" class="btn btn-outline-danger btn-sm fw-semibold shadow-sm text-nowrap"><i class="bi bi-box-arrow-right me-1"></i><span class="d-none d-sm-inline">Thoát</span></a>
         </div>
     </div>
-    <div class="d-flex align-items-center gap-3">
-        <span class="badge bg-light text-dark shadow-sm px-3 py-2 border rounded-pill">
-            <i class="bi bi-person-circle text-danger me-1"></i> User: <strong>{{ user }}</strong> 
-            <span class="badge bg-danger ms-2">{{ store_code }}</span>
-        </span>
-        <a href="/logout" class="btn btn-outline-danger btn-sm fw-semibold shadow-sm"><i class="bi bi-box-arrow-right me-1"></i> Đăng xuất</a>
-    </div>
-</div>s
 
-    <!-- Navigation Tabs -->
-    <ul class="nav nav-pills mb-4 gap-2" id="mainTab" role="tablist">
+    <!-- Navigation Tabs (Hỗ trợ vuốt ngang trên điện thoại) -->
+    <ul class="nav nav-pills mb-3 mb-md-4 gap-2 flex-nowrap overflow-auto" id="mainTab" role="tablist">
         <li class="nav-item" role="presentation">
             <button class="nav-link active" id="report-tab" data-bs-toggle="pill" data-bs-target="#report-pane" onclick="loadData()">
                 <i class="bi bi-bar-chart-fill me-2"></i>Dashboard & Kết Quả
@@ -128,7 +137,7 @@
         {% if role == 'admin' %}
         <li class="nav-item" role="presentation">
             <button class="nav-link" id="admin-tab" data-bs-toggle="pill" data-bs-target="#admin-pane" onclick="loadAdminUsers()">
-                <i class="bi bi-gear-fill me-2"></i>Quản Lý User & Mật Khẩu
+                <i class="bi bi-gear-fill me-2"></i>Quản Lý User
             </button>
         </li>
         {% endif %}
@@ -140,9 +149,9 @@
         <div class="tab-pane fade show active" id="report-pane">
             
             {% if role == 'admin' %}
-            <div class="card card-custom p-3 mb-4">
+            <div class="card card-custom p-3 mb-3 mb-md-4">
                 <div class="row align-items-center">
-                    <div class="col-md-4">
+                    <div class="col-12 col-md-4">
                         <label class="form-label fw-semibold small mb-1 text-secondary">Chọn Cửa Hàng Xem Báo Cáo:</label>
                         <select id="admin-store-filter" class="form-select border-danger-subtle" onchange="loadData()">
                             <option value="ALL">🌐 Tất Cả Cửa Hàng Nam Sương (Gộp)</option>
@@ -158,57 +167,57 @@
             </div>
             {% endif %}
 
-            <div class="alert alert-danger py-2 px-3 mb-4 d-flex align-items-center justify-content-between shadow-sm border-0 bg-white" style="border-left: 5px solid #dc3545 !important; border-radius: 10px;">
+            <div class="alert alert-danger py-2 px-3 mb-3 mb-md-4 d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between shadow-sm border-0 bg-white gap-2" style="border-left: 5px solid #dc3545 !important; border-radius: 10px;">
                 <div class="d-flex align-items-center">
-                    <i class="bi bi-calendar-range text-danger fs-4 me-3"></i>
+                    <i class="bi bi-calendar-range text-danger fs-4 me-3 flex-shrink-0"></i>
                     <div>
-                        <span class="text-muted small d-block">Phạm vi thời gian đơn đặt hàng (PO) trong báo cáo:</span>
-                        <strong class="text-dark">Từ ngày <span id="report-min-date">--/--/----</span> đến ngày <span id="report-max-date">--/--/----</span></strong>
+                        <span class="text-muted small d-block" style="font-size: 0.75rem;">Phạm vi thời gian đơn đặt hàng (PO):</span>
+                        <strong class="text-dark small">Từ <span id="report-min-date">--/--/----</span> đến <span id="report-max-date">--/--/----</span></strong>
                     </div>
                 </div>
-                <span class="badge bg-danger bg-opacity-10 text-danger px-3 py-2 rounded-pill small">Dữ liệu tự động quét</span>
+                <span class="badge bg-danger bg-opacity-10 text-danger px-2 py-1 rounded-pill small align-self-end align-self-md-center">Tự động quét</span>
             </div>
 
             <!-- Stat Cards -->
-            <div class="row g-3 mb-4">
-                <div class="col-xl-3 col-sm-6">
-                    <div class="card card-custom p-3 stat-card stat-total">
+            <div class="row g-2 g-md-3 mb-3 mb-md-4">
+                <div class="col-6 col-xl-3">
+                    <div class="card card-custom p-2 p-md-3 stat-card stat-total">
                         <div class="d-flex align-items-center justify-content-between">
                             <div>
-                                <span class="text-muted small fw-semibold text-uppercase">Tổng Mã Hàng</span>
+                                <span class="text-muted fw-semibold text-uppercase" style="font-size: 0.68rem;">Tổng Mã Hàng</span>
                                 <h3 class="fw-bold mb-0 mt-1" id="stat-total">0</h3>
                             </div>
                             <div class="stat-icon bg-secondary bg-opacity-10 text-secondary"><i class="bi bi-archive-fill"></i></div>
                         </div>
                     </div>
                 </div>
-                <div class="col-xl-3 col-sm-6">
-                    <div class="card card-custom p-3 stat-card stat-debt">
+                <div class="col-6 col-xl-3">
+                    <div class="card card-custom p-2 p-md-3 stat-card stat-debt">
                         <div class="d-flex align-items-center justify-content-between">
                             <div>
-                                <span class="text-muted small fw-semibold text-uppercase text-danger">Đang Nợ Hàng</span>
+                                <span class="fw-semibold text-uppercase text-danger" style="font-size: 0.68rem;">Đang Nợ Hàng</span>
                                 <h3 class="fw-bold text-danger mb-0 mt-1" id="stat-debt">0</h3>
                             </div>
                             <div class="stat-icon bg-danger bg-opacity-10 text-danger"><i class="bi bi-exclamation-triangle-fill"></i></div>
                         </div>
                     </div>
                 </div>
-                <div class="col-xl-3 col-sm-6">
-                    <div class="card card-custom p-3 stat-card stat-shipping">
+                <div class="col-6 col-xl-3">
+                    <div class="card card-custom p-2 p-md-3 stat-card stat-shipping">
                         <div class="d-flex align-items-center justify-content-between">
                             <div>
-                                <span class="text-muted small fw-semibold text-uppercase text-warning">Đang Vận Chuyển</span>
+                                <span class="fw-semibold text-uppercase text-warning" style="font-size: 0.68rem;">Đang Vận Chuyển</span>
                                 <h3 class="fw-bold text-warning mb-0 mt-1" id="stat-shipping">0</h3>
                             </div>
                             <div class="stat-icon bg-warning bg-opacity-10 text-warning"><i class="bi bi-truck"></i></div>
                         </div>
                     </div>
                 </div>
-                <div class="col-xl-3 col-sm-6">
-                    <div class="card card-custom p-3 stat-card stat-received">
+                <div class="col-6 col-xl-3">
+                    <div class="card card-custom p-2 p-md-3 stat-card stat-received">
                         <div class="d-flex align-items-center justify-content-between">
                             <div>
-                                <span class="text-muted small fw-semibold text-uppercase text-success">Đã Nhận Hàng</span>
+                                <span class="fw-semibold text-uppercase text-success" style="font-size: 0.68rem;">Đã Nhận Hàng</span>
                                 <h3 class="fw-bold text-success mb-0 mt-1" id="stat-received">0</h3>
                             </div>
                             <div class="stat-icon bg-success bg-opacity-10 text-success"><i class="bi bi-check-circle-fill"></i></div>
@@ -218,47 +227,47 @@
             </div>
 
             <!-- Charts Section -->
-            <div class="row g-4 mb-4">
+            <div class="row g-3 g-md-4 mb-3 mb-md-4">
                 <div class="col-lg-8">
-                    <div class="card card-custom p-4 h-100">
-                        <h6 class="fw-bold mb-3"><i class="bi bi-bar-chart-line text-danger me-2"></i>Biểu Đồ Phân Phối Trạng Thái Phụ Tùng</h6>
-                        <div style="height: 280px;"><canvas id="statusChart"></canvas></div>
+                    <div class="card card-custom p-3 p-md-4 h-100">
+                        <h6 class="fw-bold mb-3 small fs-md-6"><i class="bi bi-bar-chart-line text-danger me-2"></i>Biểu Đồ Phân Phối Trạng Thái Phụ Tùng</h6>
+                        <div style="height: 240px;"><canvas id="statusChart"></canvas></div>
                     </div>
                 </div>
                 <div class="col-lg-4">
-                    <div class="card card-custom p-4 h-100">
-                        <h6 class="fw-bold mb-3"><i class="bi bi-pie-chart-fill text-danger me-2"></i>Tỷ Lệ Tình Trạng</h6>
-                        <div style="height: 280px;"><canvas id="pieChart"></canvas></div>
+                    <div class="card card-custom p-3 p-md-4 h-100">
+                        <h6 class="fw-bold mb-3 small fs-md-6"><i class="bi bi-pie-chart-fill text-danger me-2"></i>Tỷ Lệ Tình Trạng</h6>
+                        <div style="height: 240px;"><canvas id="pieChart"></canvas></div>
                     </div>
                 </div>
             </div>
 
             <!-- Table & Search Toolbar -->
-            <div class="card card-custom p-4">
-                <div class="row g-3 align-items-center justify-content-between mb-3">
-                    <div class="col-md-7 d-flex gap-2">
+            <div class="card card-custom p-3 p-md-4">
+                <div class="row g-2 g-md-3 align-items-center justify-content-between mb-3">
+                    <div class="col-12 col-md-7 d-flex flex-column flex-sm-row gap-2">
                         <div class="input-group">
                             <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
-                            <input type="text" id="search-input" class="form-control border-start-0 ps-0" placeholder="Tìm theo Mã PO hoặc Mã phụ tùng..." oninput="filterData()">
+                            <input type="text" id="search-input" class="form-control border-start-0 ps-0 small" placeholder="Tìm theo Mã PO hoặc Phụ tùng..." oninput="filterData()">
                         </div>
-                        <select id="filter-status" class="form-select w-auto" onchange="filterData()">
+                        <select id="filter-status" class="form-select w-sm-auto small" onchange="filterData()">
                             <option value="">Tất cả trạng thái</option>
                             <option value="Nợ">Nợ</option>
                             <option value="Đang vận chuyển">Đang vận chuyển</option>
                             <option value="Đã nhận hàng">Đã nhận hàng</option>
                         </select>
                     </div>
-                    <div class="col-md-5 d-flex justify-content-md-end align-items-center gap-3">
-                        <span class="text-muted small">Hiển thị <strong id="visible-count" class="text-dark">0</strong> mã</span>
-                        <button class="btn btn-outline-success btn-sm" onclick="exportToExcel()"><i class="bi bi-file-earmark-excel me-1"></i> Xuất Excel</button>
+                    <div class="col-12 col-md-5 d-flex justify-content-between justify-content-md-end align-items-center gap-3">
+                        <span class="text-muted small">Hiển thị <strong id="visible-count" class="text-dark">0</strong> dòng</span>
+                        <button class="btn btn-outline-success btn-sm text-nowrap" onclick="exportToExcel()"><i class="bi bi-file-earmark-excel me-1"></i> Xuất Excel</button>
                     </div>
                 </div>
 
                 <div class="table-responsive border rounded-3">
-                    <table class="table table-hover align-middle mb-0">
+                    <table class="table table-hover align-middle mb-0 text-nowrap">
                         <thead>
                             <tr>
-                                <th class="text-center" style="width: 50px;">STT</th>
+                                <th class="text-center" style="width: 40px;">STT</th>
                                 {% if role == 'admin' %}<th>Cửa Hàng</th>{% endif %}
                                 <th>Mã PO</th>
                                 <th>Ngày Đặt</th>
@@ -268,7 +277,7 @@
                             </tr>
                         </thead>
                         <tbody id="result-body">
-                            <tr><td colspan="7" class="text-center py-5 text-muted">Đang tải dữ liệu...</td></tr>
+                            <tr><td colspan="7" class="text-center py-4 text-muted">Đang tải dữ liệu...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -279,43 +288,43 @@
         <!-- IMPORT PANE -->
         <div class="tab-pane fade" id="import-pane">
             <form id="upload-form">
-                <div class="row g-4">
+                <div class="row g-3 g-md-4">
                     <div class="col-lg-4">
-                        <div class="card card-custom h-100 p-4">
-                            <h6 class="fw-bold mb-3"><i class="bi bi-file-earmark-spreadsheet text-danger me-2"></i>1. File Danh Sách PO</h6>
+                        <div class="card card-custom h-100 p-3 p-md-4">
+                            <h6 class="fw-bold mb-3 small"><i class="bi bi-file-earmark-spreadsheet text-danger me-2"></i>1. File Danh Sách PO</h6>
                             <div class="drop-zone" onclick="document.getElementById('ds_po_file').click()">
-                                <i class="bi bi-cloud-arrow-up display-5 text-danger mb-2"></i>
+                                <i class="bi bi-cloud-arrow-up display-6 text-danger mb-2"></i>
                                 <p class="text-muted small mb-0">Kéo thả file hoặc nhấp chọn</p>
-                                <div class="file-name text-danger fw-semibold mt-2 small" id="ds-po-file-name"></div>
+                                <div class="file-name text-danger fw-semibold mt-2 small text-truncate" id="ds-po-file-name"></div>
                                 <input type="file" id="ds_po_file" accept=".xlsx, .xls, .csv" style="display: none;" required>
                             </div>
                         </div>
                     </div>
                     <div class="col-lg-4">
-                        <div class="card card-custom h-100 p-4">
-                            <h6 class="fw-bold mb-3"><i class="bi bi-list-check text-warning me-2"></i>2. File Chi Tiết PO</h6>
+                        <div class="card card-custom h-100 p-3 p-md-4">
+                            <h6 class="fw-bold mb-3 small"><i class="bi bi-list-check text-warning me-2"></i>2. File Chi Tiết PO</h6>
                             <div class="drop-zone" onclick="document.getElementById('po_detail_file').click()">
-                                <i class="bi bi-cloud-arrow-up display-5 text-warning mb-2"></i>
+                                <i class="bi bi-cloud-arrow-up display-6 text-warning mb-2"></i>
                                 <p class="text-muted small mb-0">Kéo thả file hoặc nhấp chọn</p>
-                                <div class="file-name text-warning fw-semibold mt-2 small" id="po-detail-file-name"></div>
+                                <div class="file-name text-warning fw-semibold mt-2 small text-truncate" id="po-detail-file-name"></div>
                                 <input type="file" id="po_detail_file" accept=".xlsx, .xls, .csv" style="display: none;" required>
                             </div>
                         </div>
                     </div>
                     <div class="col-lg-4">
-                        <div class="card card-custom h-100 p-4">
-                            <h6 class="fw-bold mb-3"><i class="bi bi-box-seam text-success me-2"></i>3. File Chi Tiết Nhận Hàng</h6>
+                        <div class="card card-custom h-100 p-3 p-md-4">
+                            <h6 class="fw-bold mb-3 small"><i class="bi bi-box-seam text-success me-2"></i>3. File Chi Tiết Nhận Hàng</h6>
                             <div class="drop-zone" onclick="document.getElementById('receipt_file').click()">
-                                <i class="bi bi-cloud-arrow-up display-5 text-success mb-2"></i>
+                                <i class="bi bi-cloud-arrow-up display-6 text-success mb-2"></i>
                                 <p class="text-muted small mb-0">Kéo thả file hoặc nhấp chọn</p>
-                                <div class="file-name text-success fw-semibold mt-2 small" id="receipt-file-name"></div>
+                                <div class="file-name text-success fw-semibold mt-2 small text-truncate" id="receipt-file-name"></div>
                                 <input type="file" id="receipt_file" accept=".xlsx, .xls, .csv" style="display: none;" required>
                             </div>
                         </div>
                     </div>
                 </div>
-                <div class="mt-4 text-end">
-                    <button type="submit" class="btn btn-danger btn-lg px-5 shadow-sm fw-semibold" style="background-color: #dc3545;">
+                <div class="mt-4 text-center text-md-end">
+                    <button type="submit" class="btn btn-danger btn-lg px-4 px-md-5 shadow-sm fw-semibold w-100 w-md-auto" style="background-color: #dc3545;">
                         <i class="bi bi-cpu me-2"></i> Tải Lên & Đối Soát Ngay
                     </button>
                 </div>
@@ -325,10 +334,10 @@
 
         <!-- HISTORY PANE -->
         <div class="tab-pane fade" id="history-pane">
-            <div class="card card-custom p-4">
-                <h5 class="fw-bold mb-3"><i class="bi bi-clock-history me-2 text-danger"></i>Lịch Sử Các Lần Tải Lên Dữ Liệu</h5>
+            <div class="card card-custom p-3 p-md-4">
+                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-clock-history me-2 text-danger"></i>Lịch Sử Tải Lên Dữ Liệu</h5>
                 <div class="table-responsive border rounded-3">
-                    <table class="table table-hover align-middle mb-0">
+                    <table class="table table-hover align-middle mb-0 text-nowrap">
                         <thead>
                             <tr>
                                 <th class="text-center">ID</th>
@@ -350,16 +359,16 @@
         {% if role == 'admin' %}
         <!-- ADMIN PANE -->
         <div class="tab-pane fade" id="admin-pane">
-            <div class="card card-custom p-4">
-                <h5 class="fw-bold mb-3"><i class="bi bi-people-fill me-2 text-danger"></i>Quản Lý Tài Khoản & Mật Khẩu User Cửa Hàng</h5>
+            <div class="card card-custom p-3 p-md-4">
+                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-people-fill me-2 text-danger"></i>Quản Lý Tài Khoản & Mật Khẩu User</h5>
                 <div class="table-responsive border rounded-3">
                     <table class="table table-hover align-middle mb-0">
                         <thead>
                             <tr>
                                 <th>Tên Đăng Nhập</th>
-                                <th>Quyền (Role)</th>
-                                <th>Cửa Hàng Quản Lý</th>
-                                <th class="text-end">Thao Tác Đổi Mật Khẩu</th>
+                                <th>Role</th>
+                                <th>Cửa Hàng</th>
+                                <th class="text-end">Thao Tác</th>
                             </tr>
                         </thead>
                         <tbody id="admin-users-body">
@@ -376,13 +385,13 @@
 
 <!-- Modal Đổi Mật Khẩu -->
 <div class="modal fade" id="changePassModal" tabindex="-1">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow">
             <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title fw-bold">Đổi Mật Khẩu Cho User: <span id="modal-username"></span></h5>
+                <h5 class="modal-title fw-bold fs-6">Đổi Mật Khẩu: <span id="modal-username"></span></h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
-            <div class="modal-body p-4">
+            <div class="modal-body p-3 p-md-4">
                 <input type="hidden" id="target-username">
                 <div class="mb-3">
                     <label class="form-label fw-semibold small">Mật khẩu mới</label>
@@ -429,38 +438,37 @@
     }
 
     function renderTable(data) {
-    const tbody = document.getElementById('result-body');
-    document.getElementById('visible-count').innerText = data.length.toLocaleString();
-    const isAdmin = document.getElementById('admin-store-filter') !== null;
+        const tbody = document.getElementById('result-body');
+        document.getElementById('visible-count').innerText = data.length.toLocaleString();
+        const isAdmin = document.getElementById('admin-store-filter') !== null;
 
-    if (data.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-muted">Không có dữ liệu.</td></tr>`;
-        return;
+        if (data.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-muted">Không có dữ liệu.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = data.map((item, index) => {
+            let badgeClass = item.status === 'Nợ' ? 'badge-debt' : (item.status === 'Đang vận chuyển' ? 'badge-shipping' : 'badge-received');
+            
+            let orderDateHtml = (!item.order_date || item.order_date === 'N/A' || item.order_date === '') 
+                ? `<span class="text-danger fw-semibold">Cần bổ sung</span>` 
+                : `<span class="text-muted">${item.order_date}</span>`;
+
+            return `
+                <tr>
+                    <td class="text-center text-muted small">${index + 1}</td>
+                    ${isAdmin ? `<td><span class="badge bg-light text-dark border">${item.store_code || 'N/A'}</span></td>` : ''}
+                    <td><strong>${item.po_code}</strong></td>
+                    <td>${orderDateHtml}</td>
+                    <td><span class="part-code">${item.part_code}</span></td>
+                    <td class="text-center"><span class="badge-status ${badgeClass}">${item.status}</span></td>
+                    <td class="text-end fw-bold ${item.status === 'Nợ' ? 'text-danger' : (item.status === 'Đang vận chuyển' ? 'text-warning' : 'text-muted')}">
+                        ${item.status !== 'Đã nhận hàng' ? `${item.days_debt} ngày` : '-'}
+                    </td>
+                </tr>
+            `;
+        }).join('');
     }
-
-    tbody.innerHTML = data.map((item, index) => {
-        let badgeClass = item.status === 'Nợ' ? 'badge-debt' : (item.status === 'Đang vận chuyển' ? 'badge-shipping' : 'badge-received');
-        
-        // Kiểm tra nếu không có ngày đặt hoặc là N/A thì hiển thị "Cần bổ sung" màu đỏ
-        let orderDateHtml = (!item.order_date || item.order_date === 'N/A' || item.order_date === '') 
-            ? `<span class="text-danger fw-semibold">Cần bổ sung</span>` 
-            : `<span class="text-muted">${item.order_date}</span>`;
-
-        return `
-            <tr>
-                <td class="text-center text-muted small">${index + 1}</td>
-                ${isAdmin ? `<td><span class="badge bg-light text-dark border">${item.store_code || 'N/A'}</span></td>` : ''}
-                <td><strong>${item.po_code}</strong></td>
-                <td>${orderDateHtml}</td>
-                <td><span class="part-code">${item.part_code}</span></td>
-                <td class="text-center"><span class="badge-status ${badgeClass}">${item.status}</span></td>
-                <td class="text-end fw-bold ${item.status === 'Nợ' ? 'text-danger' : (item.status === 'Đang vận chuyển' ? 'text-warning' : 'text-muted')}">
-                    ${item.status !== 'Đã nhận hàng' ? `${item.days_debt} ngày` : '-'}
-                </td>
-            </tr>
-        `;
-    }).join('');
-}
 
     function filterData() {
         const search = document.getElementById('search-input').value.toLowerCase();
@@ -561,7 +569,7 @@
                     <td>${u.store_code}</td>
                     <td class="text-end">
                         <button class="btn btn-outline-danger btn-sm" onclick="openPassModal('${u.username}')">
-                            <i class="bi bi-key me-1"></i> Đổi Mật Khẩu
+                            <i class="bi bi-key me-1"></i> <span class="d-none d-sm-inline">Đổi Mật Khẩu</span>
                         </button>
                     </td>
                 </tr>
@@ -578,7 +586,7 @@
 
     async function submitNewPassword() {
         const username = document.getElementById('target-username').value;
-        const password = document.getElementById('new-password-input').value;
+        const password = document.getElementById('new-password-input-input' ? 'new-password-input-input' : 'new-password-input').value;
         if(!password) { alert('Vui lòng nhập mật khẩu mới'); return; }
 
         const res = await fetch('/api/admin/users', {
