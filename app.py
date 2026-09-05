@@ -3,6 +3,7 @@ import json
 import traceback
 from datetime import datetime, timedelta
 import pandas as pd
+import numpy as np
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, g
 import psycopg2
 from psycopg2 import pool as pg_pool
@@ -198,8 +199,31 @@ def init_db():
         cursor.execute('ALTER TABLE po_detail_items ADD COLUMN IF NOT EXISTS quantity NUMERIC')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_po_detail_store ON po_detail_items(store_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_po_detail_upload_time ON po_detail_items(upload_time)')
+
+        # Dọn các dòng trùng lặp (Mã PO + Mã phụ tùng + Số lượng) có thể đã
+        # tồn tại từ TRƯỚC KHI có cơ chế dedup ở CSDL dưới đây (chỉ giữ lại
+        # dòng có id nhỏ nhất/cũ nhất của mỗi nhóm trùng) - bước này BẮT
+        # BUỘC phải chạy trước khi tạo UNIQUE INDEX, nếu không CREATE UNIQUE
+        # INDEX sẽ báo lỗi vì dữ liệu đang vi phạm ràng buộc duy nhất.
         cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_po_detail_dedup
+            DELETE FROM po_detail_items a
+            USING po_detail_items b
+            WHERE a.id > b.id
+              AND a.store_code = b.store_code
+              AND a.po_code = b.po_code
+              AND a.part_code = b.part_code
+              AND a.quantity IS NOT DISTINCT FROM b.quantity
+        ''')
+
+        # Đổi từ INDEX thường sang UNIQUE INDEX: nhờ vậy việc chống trùng
+        # lặp khi ghi thêm dữ liệu (append_po_detail) có thể giao hẳn cho
+        # Postgres xử lý bằng "INSERT ... ON CONFLICT DO NOTHING" thay vì
+        # phải SELECT toàn bộ khoá đã có của cửa hàng vào RAM Python rồi so
+        # sánh từng dòng - cách cũ càng chậm và tốn RAM hơn khi bảng càng
+        # tích luỹ nhiều dữ liệu theo thời gian.
+        cursor.execute('DROP INDEX IF EXISTS idx_po_detail_dedup')
+        cursor.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_po_detail_dedup_uniq
             ON po_detail_items(store_code, po_code, part_code, quantity)
         ''')
 
@@ -234,7 +258,23 @@ def init_db():
             )
         ''')
 
-        # 7. Seed default users nếu chưa có
+        # 8. Cache bảng đối soát đã tính sẵn cho mỗi cửa hàng, LƯU TRONG CSDL
+        #    (không chỉ RAM của 1 tiến trình) để dùng CHUNG được giữa NHIỀU
+        #    worker Flask (nếu Render chạy `gunicorn -w N` với N > 1) - mỗi
+        #    worker là 1 tiến trình riêng, không chia sẻ RAM với nhau, nên
+        #    biến toàn cục _result_cache trong Python chỉ có tác dụng cho
+        #    đúng worker đã tính ra nó. Cột "version" dùng để biết cache còn
+        #    hợp lệ hay đã cũ (giống hệt cơ chế data_version đang dùng).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS computed_cache (
+                store_code VARCHAR(20) PRIMARY KEY,
+                version VARCHAR(50) NOT NULL,
+                data_json TEXT NOT NULL,
+                updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+            )
+        ''')
+
+        # 9. Seed default users nếu chưa có
         cursor.execute("SELECT COUNT(*) FROM users")
         count = cursor.fetchone()['count']
         if count == 0:
@@ -646,8 +686,21 @@ def map_order_type(raw_val):
 
 
 def process_data(ds_po_df, po_detail_df, receipt_df):
+    """
+    Tính bảng đối soát. ĐÃ VECTOR HÓA bằng pandas (groupby/merge/map) thay
+    vì lặp qua từng dòng bằng .iterrows() như bản cũ - .iterrows() tạo 1
+    Series mới cho mỗi dòng nên rất chậm (chậm hơn hàng chục-hàng trăm lần
+    so với thao tác vector hóa) khi số dòng lên tới hàng chục nghìn, và là
+    nguyên nhân chính gây chậm/timeout khi dữ liệu lớn.
+
+    po_detail_df LUÔN được load_store_dataframes() chuẩn bị sẵn với đúng 3
+    cột đã làm sạch: 'po_code', 'part_code', 'quantity' (lấy trực tiếp từ
+    CSDL, không phải file Excel gốc) nên không cần dò tên cột / clean_str /
+    parse_qty lại cho DataFrame này như 2 DataFrame còn lại.
+    """
+    ds_po_df = ds_po_df.copy()
+    receipt_df = receipt_df.copy()
     ds_po_df.columns = [str(c).strip() for c in ds_po_df.columns]
-    po_detail_df.columns = [str(c).strip() for c in po_detail_df.columns]
     receipt_df.columns = [str(c).strip() for c in receipt_df.columns]
 
     ds_po_col = find_col(ds_po_df.columns, ['mã đơn hàng mua', 'mã đơn hàng', 'mã po', 'order number', 'po'])
@@ -655,116 +708,105 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
     ds_status_col = find_col(ds_po_df.columns, ['trạng thái đơn hàng mua', 'trạng thái đơn hàng', 'trạng thái po'])
     ds_order_type_col = find_col(ds_po_df.columns, ['phân loại đơn hàng phụ tùng', 'phân loại đơn hàng', 'loại đơn hàng', 'order type'])
 
-    detail_po_col = find_col(po_detail_df.columns, ['order number', 'mã đơn hàng mua', 'mã đơn hàng', 'mã po', 'po'])
-    detail_part_col = find_col(po_detail_df.columns, ['part#', 'part #', 'part number', 'mã phụ tùng', 'part'])
-    detail_qty_col = find_col(po_detail_df.columns, ['quantity requested', 'số lượng yêu cầu', 'số lượng', 'quantity'])
-
     rec_po_col = find_col(receipt_df.columns, ['siebel po number', 'po number', 'mã đơn hàng mua', 'mã đơn hàng', 'po'])
     rec_part_col = find_col(receipt_df.columns, ['part#', 'part #', 'part number', 'mã phụ tùng', 'part'])
     rec_status_col = find_col(receipt_df.columns, ['mrn status', 'trạng thái', 'status'])
 
     if not all([ds_po_col, ds_date_col]):
         raise ValueError("File Danh sách PO thiếu cột 'Mã PO' hoặc 'Ngày đặt'.")
-    if not all([detail_po_col, detail_part_col]):
-        raise ValueError("File Chi tiết PO thiếu cột 'Mã PO' hoặc 'Mã phụ tùng'.")
-    if not detail_qty_col:
-        raise ValueError("File Chi tiết PO thiếu cột 'Số lượng' (Quantity Requested).")
     if not all([rec_po_col, rec_part_col, rec_status_col]):
         raise ValueError("File Chi tiết nhận hàng thiếu cột 'Mã PO', 'Mã phụ tùng' hoặc 'Trạng thái'.")
+    for required_col in ('po_code', 'part_code', 'quantity'):
+        if required_col not in po_detail_df.columns:
+            raise ValueError("Dữ liệu Chi tiết PO thiếu cột bắt buộc để tính toán.")
 
-    date_lookup = {}
-    order_type_lookup = {}
+    if po_detail_df.empty:
+        return pd.DataFrame()
+
+    # ---------- 1) Danh sách PO: ngày đặt sớm nhất / PO bị huỷ / loại đơn hàng ----------
+    ds = pd.DataFrame({'po_val': ds_po_df[ds_po_col].map(clean_str)})
+    ds = ds[ds['po_val'] != '']
+    ds['order_date'] = pd.to_datetime(ds_po_df.loc[ds.index, ds_date_col], dayfirst=True, errors='coerce')
+
+    # Ngày đặt sớm nhất cho mỗi Mã PO (thay cho "if po_val not in date_lookup or order_date < date_lookup[po_val]")
+    date_lookup = ds.dropna(subset=['order_date']).groupby('po_val')['order_date'].min()
+
     cancelled_pos = set()
-    for _, row in ds_po_df.iterrows():
-        po_val = clean_str(row[ds_po_col])
-        if not po_val:
-            continue
-        try:
-            order_date = pd.to_datetime(row[ds_date_col], dayfirst=True)
-        except Exception:
-            order_date = None
+    if ds_status_col:
+        status_vals = ds_po_df.loc[ds.index, ds_status_col].map(clean_str)
+        cancelled_pos = set(ds.loc[status_vals == 'CANCELLED', 'po_val'])
 
-        if order_date is not None and not pd.isna(order_date):
-            if po_val not in date_lookup or order_date < date_lookup[po_val]:
-                date_lookup[po_val] = order_date
+    order_type_lookup = {}
+    if ds_order_type_col:
+        raw_types = ds_po_df.loc[ds.index, ds_order_type_col]
+        valid_type = raw_types.notna() & (raw_types.astype(str).str.strip() != '')
+        if valid_type.any():
+            # Giữ lần xuất hiện ĐẦU TIÊN của mỗi Mã PO (giống "if po_val not in order_type_lookup" cũ)
+            order_type_lookup = (
+                pd.DataFrame({'po_val': ds['po_val'][valid_type], 'type': raw_types[valid_type]})
+                .drop_duplicates('po_val', keep='first')
+                .set_index('po_val')['type']
+                .to_dict()
+            )
 
-        if ds_status_col:
-            if clean_str(row[ds_status_col]) == 'CANCELLED':
-                cancelled_pos.add(po_val)
+    # ---------- 2) Chi tiết nhận hàng: trạng thái mỗi cặp (Mã PO, Mã phụ tùng) ----------
+    rec = pd.DataFrame({
+        'po_val': receipt_df[rec_po_col].map(clean_str),
+        'part_val': receipt_df[rec_part_col].map(clean_str),
+        'status_val': receipt_df[rec_status_col].map(clean_str),
+    })
+    rec = rec[(rec['po_val'] != '') & (rec['part_val'] != '')]
 
-        if ds_order_type_col and po_val not in order_type_lookup:
-            raw_type = row[ds_order_type_col]
-            if raw_type is not None and not pd.isna(raw_type) and str(raw_type).strip():
-                order_type_lookup[po_val] = raw_type
+    if rec.empty:
+        receipt_lookup = {}
+    else:
+        # OPEN luôn thắng nếu có ít nhất 1 dòng OPEN; nếu không thì lấy
+        # trạng thái của lần xuất hiện đầu tiên - đúng bằng logic gốc
+        # "if key not in receipt_lookup or status_val == 'OPEN': receipt_lookup[key] = status_val"
+        has_open = rec.assign(is_open=rec['status_val'] == 'OPEN').groupby(['po_val', 'part_val'])['is_open'].any()
+        first_status = rec.drop_duplicates(['po_val', 'part_val'], keep='first').set_index(['po_val', 'part_val'])['status_val']
+        receipt_lookup = first_status.where(~has_open, 'OPEN').to_dict()
 
-    receipt_lookup = {}
-    for _, row in receipt_df.iterrows():
-        po_val = clean_str(row[rec_po_col])
-        part_val = clean_str(row[rec_part_col])
-        status_val = clean_str(row[rec_status_col])
-        if po_val and part_val:
-            if (po_val, part_val) not in receipt_lookup or status_val == 'OPEN':
-                receipt_lookup[(po_val, part_val)] = status_val
+    # ---------- 3) Chi tiết PO: ghép với 2 bảng trên ----------
+    detail = po_detail_df[['po_code', 'part_code', 'quantity']].copy()
+    detail = detail[(detail['po_code'] != '') & (detail['part_code'] != '')]
+    detail = detail[~detail['po_code'].isin(cancelled_pos)]
+    # Chỉ giữ lần xuất hiện ĐẦU TIÊN của mỗi cặp (Mã PO, Mã phụ tùng) - giống "seen_pairs" cũ
+    detail = detail.drop_duplicates(subset=['po_code', 'part_code'], keep='first')
+
+    if detail.empty:
+        return pd.DataFrame()
 
     today = datetime.now()
-    seen_pairs = set()
-    results = []
+    order_date = pd.to_datetime(detail['po_code'].map(date_lookup))
+    has_date = order_date.notna()
+    days_diff = (today - order_date).dt.days
+    detail['order_date'] = order_date.dt.strftime('%d/%m/%Y').where(has_date, 'Chưa có dữ liệu')
 
-    for _, row in po_detail_df.iterrows():
-        po_code = clean_str(row[detail_po_col])
-        part_code = clean_str(row[detail_part_col])
+    rec_keys = pd.Series(list(zip(detail['po_code'], detail['part_code'])), index=detail.index)
+    rec_status = rec_keys.map(receipt_lookup)
 
-        if not po_code or not part_code or po_code in cancelled_pos:
-            continue
+    detail['status'] = np.select(
+        [rec_status == 'OPEN', rec_status == 'CLOSED'],
+        ['Đang vận chuyển', 'Đã nhận hàng'],
+        default='Nợ',
+    )
 
-        pair_key = (po_code, part_code)
-        if pair_key in seen_pairs:
-            continue
-        seen_pairs.add(pair_key)
+    # show_days = trạng thái đang "Nợ" hoặc "Đang vận chuyển" (phụ tùng chưa nhận đủ hàng)
+    show_days = detail['status'].isin(['Nợ', 'Đang vận chuyển'])
+    detail['days_debt'] = np.where(show_days & has_date, days_diff.fillna(0).astype(int), 0)
+    qty_numeric = pd.to_numeric(detail['quantity'], errors='coerce').fillna(0)
+    detail['qty_debt'] = np.where(show_days, qty_numeric, 0)
+    detail['order_type'] = detail['po_code'].map(order_type_lookup).map(map_order_type)
 
-        order_date = date_lookup.get(po_code)
-        if order_date is not None:
-            days_diff = (today - order_date).days
-            date_str = order_date.strftime('%d/%m/%Y')
-        else:
-            days_diff = 0
-            date_str = 'Chưa có dữ liệu'
+    df = detail[['po_code', 'part_code', 'order_date', 'order_type', 'status', 'days_debt', 'qty_debt']].reset_index(drop=True)
 
-        rec_status = receipt_lookup.get(pair_key)
-        if rec_status == 'OPEN':
-            final_status = 'Đang vận chuyển'
-        elif rec_status == 'CLOSED':
-            final_status = 'Đã nhận hàng'
-        else:
-            final_status = 'Nợ'
+    # Cột "cộng dồn": tổng số lượng nợ (trạng thái Nợ + Đang vận chuyển)
+    # của TẤT CẢ các PO có cùng mã phụ tùng.
+    df['qty_debt_total'] = df.groupby('part_code')['qty_debt'].transform('sum')
 
-        show_days = final_status in ('Nợ', 'Đang vận chuyển')
-        # Số lượng nợ của DÒNG này (1 PO + 1 mã phụ tùng): chỉ tính khi
-        # trạng thái đang "Nợ" hoặc "Đang vận chuyển", ngược lại là 0 vì
-        # phụ tùng đã nhận đủ hàng.
-        qty_val = parse_qty(row[detail_qty_col])
-        qty_debt = qty_val if show_days else 0
-
-        order_type_label = map_order_type(order_type_lookup.get(po_code))
-
-        results.append({
-            'po_code': po_code,
-            'part_code': part_code,
-            'order_date': date_str,
-            'order_type': order_type_label,
-            'status': final_status,
-            'days_debt': days_diff if show_days else 0,
-            'qty_debt': qty_debt
-        })
-
-    df = pd.DataFrame(results)
-    if not df.empty:
-        # Cột "cộng dồn": tổng số lượng nợ (trạng thái Nợ + Đang vận chuyển)
-        # của TẤT CẢ các PO có cùng mã phụ tùng.
-        df['qty_debt_total'] = df.groupby('part_code')['qty_debt'].transform('sum')
-
-        df['_sort'] = df.apply(lambda r: -r['days_debt'] if r['status'] in ('Nợ', 'Đang vận chuyển') else 0, axis=1)
-        df = df.sort_values(by=['_sort', 'po_code']).drop(columns=['_sort']).reset_index(drop=True)
+    sort_key = np.where(df['status'].isin(['Nợ', 'Đang vận chuyển']), -df['days_debt'], 0)
+    df = df.assign(_sort=sort_key).sort_values(by=['_sort', 'po_code']).drop(columns=['_sort']).reset_index(drop=True)
 
     return df
 
@@ -817,11 +859,19 @@ def save_receipt(cursor, store_code, receipt_file, receipt_df, upload_time):
 
 def append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_time):
     """Chi tiết PO: GHI THÊM vào dữ liệu cũ (không xoá gì cả), NHƯNG sẽ tự
-    động kiểm tra và BỎ QUA (không ghi vào CSDL) các dòng đã tồn tại sẵn -
-    xác định trùng lặp dựa trên bộ 3 giá trị (Mã PO, Mã phụ tùng, Số lượng)
-    của cùng 1 cửa hàng. Việc kiểm tra này áp dụng cho cả:
+    động BỎ QUA (không ghi vào CSDL) các dòng đã tồn tại sẵn - xác định
+    trùng lặp dựa trên bộ 3 giá trị (Mã PO, Mã phụ tùng, Số lượng) của cùng
+    1 cửa hàng. Việc kiểm tra này áp dụng cho cả:
       - Dữ liệu đã có sẵn trong CSDL từ các lần tải trước.
       - Các dòng trùng lặp ngay trong chính file đang tải lên lần này.
+
+    Việc chống trùng với dữ liệu ĐÃ CÓ trong CSDL được giao hẳn cho Postgres
+    xử lý qua UNIQUE INDEX (store_code, po_code, part_code, quantity) +
+    "ON CONFLICT DO NOTHING", thay vì SELECT toàn bộ khoá cũ của cửa hàng
+    vào RAM Python rồi so sánh từng dòng như trước - cách cũ càng chậm và
+    tốn RAM hơn khi po_detail_items tích luỹ càng nhiều theo thời gian (bảng
+    này KHÔNG bị xoá sạch mỗi lần tải như 2 loại file kia).
+
     Việc dọn dẹp dữ liệu quá hạn 120 ngày được xử lý riêng ở
     cleanup_old_po_detail().
 
@@ -835,58 +885,41 @@ def append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_ti
     if not detail_qty_col:
         raise ValueError("File Chi tiết PO thiếu cột 'Số lượng' (Quantity Requested).")
 
-    # Lấy trước các bộ (Mã PO, Mã phụ tùng, Số lượng) đã có sẵn trong CSDL
-    # của cửa hàng này để so sánh, tránh phải query từng dòng một (chậm).
-    cursor.execute(
-        "SELECT po_code, part_code, quantity FROM po_detail_items WHERE store_code = %s",
-        (store_code,)
+    detail = po_detail_df.copy()
+    detail['_po_code'] = detail[detail_po_col].map(clean_str)
+    detail['_part_code'] = detail[detail_part_col].map(clean_str)
+    detail['_qty'] = pd.to_numeric(detail[detail_qty_col], errors='coerce').fillna(0.0).astype(float)
+
+    detail = detail[(detail['_po_code'] != '') & (detail['_part_code'] != '')]
+
+    # Bỏ các dòng trùng lặp NGAY TRONG chính file đang tải lên (giữ dòng
+    # xuất hiện đầu tiên) - vector hóa bằng drop_duplicates() thay cho vòng
+    # lặp Python + set thủ công như trước.
+    detail = detail.drop_duplicates(subset=['_po_code', '_part_code', '_qty'], keep='first')
+
+    total_candidates = len(detail)
+    if total_candidates == 0:
+        return 0, 0
+
+    records = detail.drop(columns=['_po_code', '_part_code', '_qty']).to_dict(orient='records')
+    rows_to_insert = [
+        (store_code, po, part, qty, json.dumps(rec, ensure_ascii=False, default=str), po_detail_file.filename, upload_time)
+        for po, part, qty, rec in zip(detail['_po_code'], detail['_part_code'], detail['_qty'], records)
+    ]
+
+    inserted_rows = execute_values(
+        cursor,
+        '''INSERT INTO po_detail_items (store_code, po_code, part_code, quantity, row_json, filename, upload_time)
+           VALUES %s
+           ON CONFLICT (store_code, po_code, part_code, quantity) DO NOTHING
+           RETURNING id''',
+        rows_to_insert,
+        fetch=True,
     )
-    existing_keys = set()
-    for r in cursor.fetchall():
-        qty = float(r['quantity']) if r['quantity'] is not None else 0.0
-        existing_keys.add((r['po_code'], r['part_code'], qty))
+    inserted_count = len(inserted_rows)
+    skipped_count = total_candidates - inserted_count
 
-    rows_to_insert = []
-    seen_in_batch = set()
-    skipped_count = 0
-
-    # Tránh dùng po_detail_df.iterrows() (rất chậm vì tạo 1 Series mới cho
-    # từng dòng) - thay bằng truy cập cột dạng mảng (.tolist()) và
-    # to_dict('records') một lần duy nhất, nhanh hơn đáng kể với file nhiều
-    # nghìn dòng, giảm nguy cơ vượt timeout khi chạy trên Render.
-    po_vals = po_detail_df[detail_po_col].map(clean_str).tolist()
-    part_vals = po_detail_df[detail_part_col].map(clean_str).tolist()
-    qty_vals = [float(parse_qty(v)) for v in po_detail_df[detail_qty_col].tolist()]
-    records = po_detail_df.to_dict(orient='records')
-
-    for i in range(len(records)):
-        po_code = po_vals[i]
-        part_code = part_vals[i]
-        if not po_code or not part_code:
-            continue
-
-        qty_val = qty_vals[i]
-        key = (po_code, part_code, qty_val)
-
-        # Bỏ qua nếu bộ (Mã PO, Mã phụ tùng, Số lượng) này đã tồn tại trong
-        # CSDL, hoặc đã xuất hiện trước đó ngay trong file đang tải lên.
-        if key in existing_keys or key in seen_in_batch:
-            skipped_count += 1
-            continue
-        seen_in_batch.add(key)
-
-        row_json = json.dumps(records[i], ensure_ascii=False, default=str)
-        rows_to_insert.append((store_code, po_code, part_code, qty_val, row_json, po_detail_file.filename, upload_time))
-
-    if rows_to_insert:
-        execute_values(
-            cursor,
-            '''INSERT INTO po_detail_items (store_code, po_code, part_code, quantity, row_json, filename, upload_time)
-               VALUES %s''',
-            rows_to_insert
-        )
-
-    return len(rows_to_insert), skipped_count
+    return inserted_count, skipped_count
 
 
 def load_store_dataframes(cursor, store_code):
@@ -900,10 +933,17 @@ def load_store_dataframes(cursor, store_code):
     if not latest or not latest['ds_po_json'] or not latest['receipt_json']:
         return None
 
-    # Lấy theo thứ tự upload_time giảm dần: bản ghi nhập SAU sẽ được ưu tiên
-    # nếu có cùng cặp (Mã PO, Mã phụ tùng) xuất hiện ở nhiều lần nhập khác nhau.
+    # Lấy TRỰC TIẾP 3 cột đã CHUẨN HOÁ (po_code/part_code/quantity - vốn đã
+    # được clean_str()/pd.to_numeric() một lần khi ghi ở append_po_detail())
+    # thay vì đọc cột row_json (chứa nguyên văn mọi cột gốc của file Excel,
+    # nặng hơn nhiều) rồi json.loads() cho TỪNG dòng bằng Python. Với bảng
+    # càng lớn (cộng dồn theo thời gian), bỏ được bước này giúp giảm cả
+    # dung lượng truyền từ Postgres về lẫn thời gian parse JSON trong app.
+    # Thứ tự upload_time giảm dần chỉ còn ý nghĩa lịch sử, không ảnh hưởng
+    # kết quả vì process_data() dùng drop_duplicates(keep='first') để giữ
+    # đúng 1 dòng cho mỗi cặp (Mã PO, Mã phụ tùng) như hành vi seen_pairs cũ.
     cursor.execute(
-        "SELECT row_json FROM po_detail_items WHERE store_code = %s ORDER BY upload_time DESC",
+        "SELECT po_code, part_code, quantity FROM po_detail_items WHERE store_code = %s ORDER BY upload_time DESC",
         (store_code,)
     )
     detail_rows = cursor.fetchall()
@@ -912,7 +952,7 @@ def load_store_dataframes(cursor, store_code):
 
     ds_po_df = pd.DataFrame(json.loads(latest['ds_po_json']))
     receipt_df = pd.DataFrame(json.loads(latest['receipt_json']))
-    po_detail_df = pd.DataFrame([json.loads(r['row_json']) for r in detail_rows])
+    po_detail_df = pd.DataFrame(detail_rows, columns=['po_code', 'part_code', 'quantity'])
 
     return ds_po_df, po_detail_df, receipt_df
 
@@ -959,17 +999,58 @@ def get_global_data_version(cursor):
 
 
 def compute_result_for_store_cached(cursor, store_code, version):
-    """Giống compute_result_for_store nhưng có cache theo store_code, tự
-    động bỏ toàn bộ cache cũ khi phát hiện version dữ liệu đã đổi (có upload
-    mới ở bất kỳ cửa hàng nào)."""
+    """Giống compute_result_for_store nhưng có cache 2 TẦNG:
+    1) RAM của tiến trình hiện tại (_result_cache) - nhanh nhất, không tốn
+       round-trip tới DB, nhưng CHỈ dùng được trong đúng worker đã tính ra nó.
+    2) Bảng computed_cache trong Postgres - CHIA SẺ được giữa NHIỀU worker
+       (nếu Render chạy nhiều tiến trình Flask cùng lúc): worker nào tính
+       trước sẽ ghi kết quả vào đây, các worker khác đọc lại thay vì phải
+       tính lại từ đầu (đọc JSON từ DB vẫn rẻ hơn nhiều so với việc load lại
+       toàn bộ Danh sách PO/Chi tiết PO/Chi tiết nhận hàng rồi merge bằng
+       pandas).
+    Cả 2 tầng đều tự động vô hiệu khi "version" (mốc dữ liệu mới nhất) đổi.
+    """
     global _result_cache, _result_cache_version
     if _result_cache_version != version:
         _result_cache = {}
         _result_cache_version = version
     if store_code in _result_cache:
         return _result_cache[store_code]
+
+    version_str = str(version)
+    cursor.execute(
+        'SELECT data_json FROM computed_cache WHERE store_code = %s AND version = %s',
+        (store_code, version_str)
+    )
+    cached_row = cursor.fetchone()
+    if cached_row:
+        data = json.loads(cached_row['data_json'])
+        _result_cache[store_code] = data
+        return data
+
     data = compute_result_for_store(cursor, store_code)
     _result_cache[store_code] = data
+
+    # Ghi lại vào DB cho các worker khác dùng chung. Dùng try/except riêng vì
+    # đây chỉ là tối ưu hiệu năng - nếu ghi cache lỗi (ví dụ race condition
+    # hiếm gặp) thì vẫn trả kết quả đã tính đúng cho request hiện tại, không
+    # để lỗi cache làm hỏng cả API.
+    try:
+        cursor.execute('''
+            INSERT INTO computed_cache (store_code, version, data_json, updated_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (store_code) DO UPDATE SET
+                version = EXCLUDED.version,
+                data_json = EXCLUDED.data_json,
+                updated_at = EXCLUDED.updated_at
+        ''', (store_code, version_str, json.dumps(data, ensure_ascii=False, default=str)))
+        cursor.connection.commit()
+    except Exception:
+        try:
+            cursor.connection.rollback()
+        except Exception:
+            pass
+
     return data
 
 
