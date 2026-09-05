@@ -415,7 +415,7 @@
                 </div>
                 <div class="row g-2 align-items-center mb-3">
                     <div class="col-12 col-md-6">
-                        <input type="text" id="inventory-search" class="form-control" placeholder="Tìm theo mã hàng hoặc tên hàng..." oninput="filterInventory()">
+                        <input type="text" id="inventory-search" class="form-control" placeholder="Tìm theo mã hàng hoặc tên hàng..." oninput="debouncedFilterInventory()">
                     </div>
                     <div class="col-12 col-md-6 text-md-end">
                         <span class="text-muted small">Số mã hàng hiển thị: <strong id="inventory-visible-count">0</strong></span>
@@ -784,6 +784,12 @@
         } catch (e) { console.error(e); }
     }
 
+    // Chỉ vẽ tối đa RENDER_LIMIT dòng ra DOM mỗi lần, dù kết quả lọc khớp nhiều hơn.
+    // Lý do: với 10.000+ mã hàng, gõ vài ký tự đầu vẫn khớp hàng nghìn dòng - build
+    // innerHTML cho toàn bộ số đó là bước nặng thực sự gây giật/khựng, không phải
+    // việc gọi hàm lọc. Giới hạn số dòng vẽ ra giúp mượt ngay cả khi kết quả rất lớn.
+    const INVENTORY_RENDER_LIMIT = 200;
+
     function renderInventoryTable(data) {
         const tbody = document.getElementById('inventory-body');
         document.getElementById('inventory-visible-count').innerText = data.length.toLocaleString();
@@ -794,8 +800,10 @@
         }
 
         const fmt = (v) => (v && v !== 0) ? v.toLocaleString() : '-';
+        const truncated = data.length > INVENTORY_RENDER_LIMIT;
+        const displayData = truncated ? data.slice(0, INVENTORY_RENDER_LIMIT) : data;
 
-        tbody.innerHTML = data.map(item => `
+        let html = displayData.map(item => `
             <tr>
                 <td><span class="part-code">${item.part_code}</span></td>
                 <td>${item.part_name || ''}</td>
@@ -808,6 +816,12 @@
                 <td class="text-end">${fmt(item.NSM1)}</td>
             </tr>
         `).join('');
+
+        if (truncated) {
+            html += `<tr><td colspan="9" class="text-center py-3 text-muted small fst-italic">Đang hiển thị ${INVENTORY_RENDER_LIMIT} / ${data.length.toLocaleString()} kết quả khớp — gõ thêm để thu hẹp tìm kiếm.</td></tr>`;
+        }
+
+        tbody.innerHTML = html;
     }
 
     function filterInventory() {
@@ -817,6 +831,14 @@
             (item.part_name || '').toLowerCase().includes(search)
         );
         renderInventoryTable(filtered);
+    }
+
+    // Trì hoãn lọc bảng Tồn Kho Hệ Thống (10.000+ dòng) cho tới khi người dùng
+    // ngừng gõ ~250ms, tránh lọc + vẽ lại toàn bộ bảng trên MỖI phím gõ gây giật/khựng.
+    let _inventoryFilterDebounceTimer = null;
+    function debouncedFilterInventory() {
+        clearTimeout(_inventoryFilterDebounceTimer);
+        _inventoryFilterDebounceTimer = setTimeout(filterInventory, 250);
     }
 
     const inventoryUploadForm = document.getElementById('inventory-upload-form');
