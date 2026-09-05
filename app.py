@@ -2,6 +2,7 @@ import os
 import json
 import traceback
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import pandas as pd
 import numpy as np
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, g
@@ -30,6 +31,30 @@ if not _secret_key:
         "python -c \"import secrets; print(secrets.token_hex(32))\""
     )
 app.secret_key = _secret_key
+
+# Server host (Render...) thường chạy theo giờ UTC, không phải giờ Việt Nam.
+# Nếu dùng datetime.now() thẳng thì các mốc "Cập nhật lần cuối" sẽ bị lệch
+# -7 giờ so với giờ admin thực tế bấm nút. Hàm này luôn trả về giờ VN (naive,
+# không kèm tzinfo) để lưu thẳng vào cột TIMESTAMP (không có time zone) của
+# Postgres mà không bị Postgres tự quy đổi lại theo timezone của session.
+VN_TZ = ZoneInfo('Asia/Ho_Chi_Minh')
+
+
+def vn_now():
+    return datetime.now(VN_TZ).replace(tzinfo=None)
+
+
+# Tên thứ trong tuần bằng tiếng Việt (dùng cho phần Lịch Sử Tải Lên) -
+# datetime.weekday(): Thứ Hai = 0 ... Chủ Nhật = 6.
+_WEEKDAY_VI = ['Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy', 'Chủ Nhật']
+
+
+def format_vi_datetime(dt):
+    """Định dạng datetime thành chuỗi tiếng Việt, ví dụ:
+    'Thứ Bảy, 05/09/2026 14:10'. Trả về None nếu dt rỗng."""
+    if dt is None:
+        return None
+    return f"{_WEEKDAY_VI[dt.weekday()]}, {dt.strftime('%d/%m/%Y %H:%M')}"
 
 # Cấu hình cookie phiên đăng nhập an toàn hơn:
 # - SECURE: chỉ gửi cookie qua HTTPS (Render luôn phục vụ qua HTTPS)
@@ -1152,7 +1177,7 @@ def upload_files():
         return jsonify({'error': 'Vui lòng chọn ít nhất một file để tải lên.'}), 400
 
     try:
-        upload_time = datetime.now()
+        upload_time = vn_now()
         upload_time_str = upload_time.strftime('%Y-%m-%d %H:%M:%S')
 
         db = get_db()
@@ -1244,7 +1269,7 @@ def upload_inventory():
         if not rows:
             return jsonify({'error': 'Không đọc được mã hàng nào thuộc 18 mã kho quy định trong file này.'}), 400
 
-        upload_time = datetime.now()
+        upload_time = vn_now()
         db = get_db()
         cursor = db.cursor()
 
@@ -1443,6 +1468,8 @@ def get_history():
 
     history = [dict(row) for row in cursor.fetchall()]
     cursor.close()
+    for h in history:
+        h['upload_time'] = format_vi_datetime(h['upload_time'])
     return jsonify({'success': True, 'history': history})
 
 
