@@ -1,5 +1,6 @@
 import os
 import json
+import traceback
 from datetime import datetime, timedelta
 import pandas as pd
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, g
@@ -38,7 +39,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
-    MAX_CONTENT_LENGTH=200 * 1024 * 1024,  # Giới hạn upload tối đa 50MB / request
+    MAX_CONTENT_LENGTH=50 * 1024 * 1024,  # Giới hạn upload tối đa 50MB / request
 )
 
 # Nén response (JSON, HTML) bằng gzip để giảm dung lượng truyền tải -> tải nhanh hơn
@@ -1107,6 +1108,13 @@ def upload_files():
 
         return jsonify(response)
     except Exception as e:
+        # In đầy đủ traceback ra Render Logs để chẩn đoán mà không cần mò
+        # DevTools của trình duyệt mỗi lần có lỗi.
+        app.logger.error("Lỗi /api/upload (store=%s): %s\n%s", store_code, e, traceback.format_exc())
+        try:
+            get_db().rollback()
+        except Exception:
+            pass
         return jsonify({'error': str(e)}), 500
 
 
@@ -1164,6 +1172,11 @@ def upload_inventory():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        app.logger.error("Lỗi /api/admin/upload-inventory: %s\n%s", e, traceback.format_exc())
+        try:
+            get_db().rollback()
+        except Exception:
+            pass
         return jsonify({'error': str(e)}), 500
 
 
