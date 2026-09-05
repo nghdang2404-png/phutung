@@ -298,9 +298,9 @@
                                 <i class="bi bi-cloud-arrow-up display-6 text-danger mb-2"></i>
                                 <p class="text-muted small mb-0">Kéo thả file hoặc nhấp chọn</p>
                                 <div class="file-name text-danger fw-semibold mt-2 small text-truncate" id="ds-po-file-name"></div>
-                                <input type="file" id="ds_po_file" accept=".xlsx, .xls, .csv" style="display: none;" required>
+                                <input type="file" id="ds_po_file" accept=".xlsx, .xls, .csv" style="display: none;">
                             </div>
-                            <p class="text-muted small mt-2 mb-0"><i class="bi bi-info-circle me-1"></i>Dữ liệu cũ sẽ được <strong>thay thế</strong> hoàn toàn bằng file mới.</p>
+                            <p class="text-muted small mt-2 mb-0"><i class="bi bi-info-circle me-1"></i>Không bắt buộc mỗi lần tải lên. Nếu chọn file, dữ liệu cũ sẽ được <strong>thay thế</strong> hoàn toàn bằng file mới.</p>
                         </div>
                     </div>
                     <div class="col-lg-4">
@@ -310,9 +310,9 @@
                                 <i class="bi bi-cloud-arrow-up display-6 text-warning mb-2"></i>
                                 <p class="text-muted small mb-0">Kéo thả file hoặc nhấp chọn</p>
                                 <div class="file-name text-warning fw-semibold mt-2 small text-truncate" id="po-detail-file-name"></div>
-                                <input type="file" id="po_detail_file" accept=".xlsx, .xls, .csv" style="display: none;" required>
+                                <input type="file" id="po_detail_file" accept=".xlsx, .xls, .csv" style="display: none;">
                             </div>
-                            <p class="text-muted small mt-2 mb-0"><i class="bi bi-info-circle me-1"></i>Dữ liệu sẽ được <strong>cộng dồn</strong> vào dữ liệu cũ; các dòng nhập quá 120 ngày sẽ tự động bị xoá.</p>
+                            <p class="text-muted small mt-2 mb-0"><i class="bi bi-info-circle me-1"></i>Có thể tải lên <strong>một mình file này</strong> để đối soát ngay - dữ liệu sẽ được <strong>cộng dồn</strong> vào dữ liệu cũ; các dòng nhập quá 120 ngày sẽ tự động bị xoá.</p>
                         </div>
                     </div>
                     <div class="col-lg-4">
@@ -322,12 +322,13 @@
                                 <i class="bi bi-cloud-arrow-up display-6 text-success mb-2"></i>
                                 <p class="text-muted small mb-0">Kéo thả file hoặc nhấp chọn</p>
                                 <div class="file-name text-success fw-semibold mt-2 small text-truncate" id="receipt-file-name"></div>
-                                <input type="file" id="receipt_file" accept=".xlsx, .xls, .csv" style="display: none;" required>
+                                <input type="file" id="receipt_file" accept=".xlsx, .xls, .csv" style="display: none;">
                             </div>
-                            <p class="text-muted small mt-2 mb-0"><i class="bi bi-info-circle me-1"></i>Dữ liệu cũ sẽ được <strong>thay thế</strong> hoàn toàn bằng file mới.</p>
+                            <p class="text-muted small mt-2 mb-0"><i class="bi bi-info-circle me-1"></i>Không bắt buộc mỗi lần tải lên. Nếu chọn file, dữ liệu cũ sẽ được <strong>thay thế</strong> hoàn toàn bằng file mới.</p>
                         </div>
                     </div>
                 </div>
+                <p class="text-muted small mt-3 mb-0"><i class="bi bi-exclamation-circle me-1"></i>Chỉ cần chọn <strong>ít nhất 1 trong 3 file</strong> ở trên là có thể bấm nút đối soát.</p>
                 <div class="mt-4 text-center text-md-end">
                     <button type="submit" class="btn btn-danger btn-lg px-4 px-md-5 shadow-sm fw-semibold w-100 w-md-auto" style="background-color: #dc3545;">
                         <i class="bi bi-cpu me-2"></i> Tải Lên & Đối Soát Ngay
@@ -568,17 +569,34 @@
     if(uploadForm) {
         uploadForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+
+            const dsPoFile = document.getElementById('ds_po_file').files[0];
+            const poDetailFile = document.getElementById('po_detail_file').files[0];
+            const receiptFile = document.getElementById('receipt_file').files[0];
+
+            // Chỉ cần chọn ít nhất 1 trong 3 file là được phép đối soát -
+            // ví dụ chỉ chọn file "Chi tiết PO" (dữ liệu cộng dồn, không xoá
+            // dữ liệu cũ) vẫn bấm được nút mà không cần 2 file kia.
+            if (!dsPoFile && !poDetailFile && !receiptFile) {
+                alert('Vui lòng chọn ít nhất 1 file để tải lên.');
+                return;
+            }
+
             const formData = new FormData();
-            formData.append('ds_po_file', document.getElementById('ds_po_file').files[0]);
-            formData.append('po_detail_file', document.getElementById('po_detail_file').files[0]);
-            formData.append('receipt_file', document.getElementById('receipt_file').files[0]);
+            if (dsPoFile) formData.append('ds_po_file', dsPoFile);
+            if (poDetailFile) formData.append('po_detail_file', poDetailFile);
+            if (receiptFile) formData.append('receipt_file', receiptFile);
 
             document.getElementById('loading-overlay').style.display = 'flex';
             try {
                 const res = await fetch('/api/upload', { method: 'POST', body: formData });
                 const result = await res.json();
                 if(res.ok) {
-                    alert('Tải lên và đối soát thành công!');
+                    if (result.warning) {
+                        alert('Đã tải lên thành công.\n\n' + result.warning);
+                    } else {
+                        alert('Tải lên và đối soát thành công!');
+                    }
                     loadData();
                     new bootstrap.Tab(document.getElementById('report-tab')).show();
                 } else { alert('Lỗi: ' + result.error); }
@@ -597,9 +615,9 @@
                     <td class="text-center text-muted small">${h.id}</td>
                     <td><span class="badge bg-secondary">${h.store_code}</span></td>
                     <td class="fw-semibold">${h.upload_time}</td>
-                    <td class="small text-danger">${h.ds_po_filename}</td>
-                    <td class="small text-warning">${h.po_detail_filename}</td>
-                    <td class="small text-success">${h.receipt_filename}</td>
+                    <td class="small text-danger">${h.ds_po_filename || '—'}</td>
+                    <td class="small text-warning">${h.po_detail_filename || '—'}</td>
+                    <td class="small text-success">${h.receipt_filename || '—'}</td>
                 </tr>
             `).join('');
         } else {

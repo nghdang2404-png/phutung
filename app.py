@@ -425,25 +425,36 @@ def cleanup_old_po_detail(cursor):
     )
 
 
-def save_ds_po_and_receipt(cursor, store_code, ds_po_file, ds_po_df, receipt_file, receipt_df, upload_time):
-    """Danh sách PO và Chi tiết nhận hàng: XOÁ SẠCH dữ liệu cũ của cửa hàng
-    này và THAY THẾ hoàn toàn bằng dữ liệu mới."""
+def save_ds_po(cursor, store_code, ds_po_file, ds_po_df, upload_time):
+    """Danh sách PO: XOÁ SẠCH dữ liệu cũ của cửa hàng này và THAY THẾ hoàn
+    toàn bằng dữ liệu mới. Không đụng tới dữ liệu Chi tiết nhận hàng đang có,
+    để có thể tải riêng lẻ từng loại file mà không làm mất dữ liệu loại kia."""
     ds_po_json = json.dumps(ds_po_df.to_dict(orient='records'), ensure_ascii=False, default=str)
-    receipt_json = json.dumps(receipt_df.to_dict(orient='records'), ensure_ascii=False, default=str)
 
     cursor.execute('''
-        INSERT INTO latest_uploads (store_code, ds_po_filename, ds_po_json, ds_po_upload_time,
-                                     receipt_filename, receipt_json, receipt_upload_time)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO latest_uploads (store_code, ds_po_filename, ds_po_json, ds_po_upload_time)
+        VALUES (%s, %s, %s, %s)
         ON CONFLICT (store_code) DO UPDATE SET
             ds_po_filename = EXCLUDED.ds_po_filename,
             ds_po_json = EXCLUDED.ds_po_json,
-            ds_po_upload_time = EXCLUDED.ds_po_upload_time,
+            ds_po_upload_time = EXCLUDED.ds_po_upload_time
+    ''', (store_code, ds_po_file.filename, ds_po_json, upload_time))
+
+
+def save_receipt(cursor, store_code, receipt_file, receipt_df, upload_time):
+    """Chi tiết nhận hàng: XOÁ SẠCH dữ liệu cũ của cửa hàng này và THAY THẾ
+    hoàn toàn bằng dữ liệu mới. Không đụng tới dữ liệu Danh sách PO đang có,
+    để có thể tải riêng lẻ từng loại file mà không làm mất dữ liệu loại kia."""
+    receipt_json = json.dumps(receipt_df.to_dict(orient='records'), ensure_ascii=False, default=str)
+
+    cursor.execute('''
+        INSERT INTO latest_uploads (store_code, receipt_filename, receipt_json, receipt_upload_time)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (store_code) DO UPDATE SET
             receipt_filename = EXCLUDED.receipt_filename,
             receipt_json = EXCLUDED.receipt_json,
             receipt_upload_time = EXCLUDED.receipt_upload_time
-    ''', (store_code, ds_po_file.filename, ds_po_json, upload_time,
-          receipt_file.filename, receipt_json, upload_time))
+    ''', (store_code, receipt_file.filename, receipt_json, upload_time))
 
 
 def append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_time):
@@ -570,43 +581,70 @@ def upload_files():
     po_detail_file = request.files.get('po_detail_file')
     receipt_file = request.files.get('receipt_file')
 
-    if not ds_po_file or not po_detail_file or not receipt_file:
-        return jsonify({'error': 'Vui lòng tải lên đầy đủ cả 3 file.'}), 400
+    # Cho phép tải lên MỘT hoặc MỘT VÀI file trong số 3 file, không bắt buộc
+    # phải đủ cả 3 mỗi lần. Ví dụ: "Chi tiết PO" là dữ liệu cộng dồn nên có
+    # thể tải riêng lẻ nhiều lần mà không cần đi kèm 2 file kia; 2 file
+    # "Danh sách PO" / "Chi tiết nhận hàng" (nếu có) vẫn sẽ thay thế dữ liệu
+    # cũ của đúng loại đó, các loại không được gửi lên sẽ giữ nguyên.
+    if not ds_po_file and not po_detail_file and not receipt_file:
+        return jsonify({'error': 'Vui lòng chọn ít nhất một file để tải lên.'}), 400
 
     try:
-        ds_po_df = read_any(ds_po_file)
-        po_detail_df = read_any(po_detail_file)
-        receipt_df = read_any(receipt_file)
-
         upload_time = datetime.now()
         upload_time_str = upload_time.strftime('%Y-%m-%d %H:%M:%S')
 
         db = get_db()
         cursor = db.cursor()
 
-        # 1) Danh sách PO + Chi tiết nhận hàng: xoá sạch & thay thế
-        save_ds_po_and_receipt(cursor, store_code, ds_po_file, ds_po_df, receipt_file, receipt_df, upload_time)
+        # 1) Danh sách PO: nếu có file mới thì xoá sạch & thay thế
+        if ds_po_file:
+            ds_po_df = read_any(ds_po_file)
+            save_ds_po(cursor, store_code, ds_po_file, ds_po_df, upload_time)
 
-        # 2) Chi tiết PO: ghi thêm vào dữ liệu cũ
-        append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_time)
+        # 2) Chi tiết nhận hàng: nếu có file mới thì xoá sạch & thay thế
+        if receipt_file:
+            receipt_df = read_any(receipt_file)
+            save_receipt(cursor, store_code, receipt_file, receipt_df, upload_time)
 
-        # 3) Dọn dẹp dữ liệu Chi tiết PO đã quá 120 ngày (các dữ liệu khác giữ nguyên)
+        # 3) Chi tiết PO: nếu có file mới thì ghi thêm vào dữ liệu cũ (cộng dồn)
+        if po_detail_file:
+            po_detail_df = read_any(po_detail_file)
+            append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_time)
+
+        # 4) Dọn dẹp dữ liệu Chi tiết PO đã quá 120 ngày (các dữ liệu khác giữ nguyên)
         cleanup_old_po_detail(cursor)
 
-        # 4) Ghi log lượt tải (chỉ phục vụ hiển thị lịch sử)
+        # 5) Ghi log lượt tải (chỉ phục vụ hiển thị lịch sử) - file nào không
+        #    được gửi lên lần này sẽ ghi log là NULL.
         cursor.execute('''
             INSERT INTO upload_log (store_code, upload_time, ds_po_filename, po_detail_filename, receipt_filename)
             VALUES (%s, %s, %s, %s, %s)
-        ''', (store_code, upload_time_str, ds_po_file.filename, po_detail_file.filename, receipt_file.filename))
+        ''', (
+            store_code, upload_time_str,
+            ds_po_file.filename if ds_po_file else None,
+            po_detail_file.filename if po_detail_file else None,
+            receipt_file.filename if receipt_file else None,
+        ))
 
         db.commit()
 
-        # 5) Tính lại bảng đối soát mới nhất cho cửa hàng này
+        # 6) Tính lại bảng đối soát mới nhất cho cửa hàng này
         data_dicts = compute_result_for_store(cursor, store_code)
         summary = get_summary_from_data(data_dicts)
         cursor.close()
 
-        return jsonify({'success': True, 'data': data_dicts, 'summary': summary, 'upload_time': upload_time_str})
+        response = {'success': True, 'data': data_dicts, 'summary': summary, 'upload_time': upload_time_str}
+
+        # Nếu cửa hàng chưa từng có đủ "Danh sách PO" + "Chi tiết nhận hàng"
+        # (ví dụ đây là lần tải đầu tiên và chỉ chọn mỗi file Chi tiết PO),
+        # bảng đối soát sẽ trống. Vẫn báo tải file thành công nhưng kèm cảnh
+        # báo để cửa hàng biết cần bổ sung đủ 3 loại file ít nhất 1 lần.
+        if not data_dicts:
+            response['warning'] = ('Đã lưu file thành công, nhưng chưa đủ dữ liệu để đối soát. '
+                                    'Vui lòng đảm bảo cửa hàng đã tải đủ "Danh sách PO" và '
+                                    '"Chi tiết nhận hàng" ít nhất 1 lần.')
+
+        return jsonify(response)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
