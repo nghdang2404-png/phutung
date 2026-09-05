@@ -1,20 +1,59 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, g
 import psycopg2
+from psycopg2 import pool as pg_pool
 from psycopg2.extras import RealDictCursor, execute_values
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_compress import Compress
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 
 # Nạp các biến bảo mật từ file .env
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'honda_po_secret_key_secure_2026')
+
+# SECRET_KEY bắt buộc phải có trong biến môi trường (không dùng giá trị mặc
+# định hardcode trong code nữa — nếu thiếu, ứng dụng sẽ báo lỗi ngay khi
+# khởi động thay vì chạy với 1 secret key ai cũng đọc được từ source code).
+_secret_key = os.environ.get('FLASK_SECRET_KEY')
+if not _secret_key:
+    raise RuntimeError(
+        "Thiếu biến môi trường FLASK_SECRET_KEY. Hãy đặt biến này trên Render "
+        "(Settings > Environment) với 1 chuỗi ngẫu nhiên dài, ví dụ tạo bằng: "
+        "python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+app.secret_key = _secret_key
+
+# Cấu hình cookie phiên đăng nhập an toàn hơn:
+# - SECURE: chỉ gửi cookie qua HTTPS (Render luôn phục vụ qua HTTPS)
+# - HTTPONLY: JavaScript phía trình duyệt không đọc được cookie (chống XSS đánh cắp session)
+# - SAMESITE=Lax: hạn chế cookie bị gửi kèm trong các request từ trang khác (chống CSRF cơ bản)
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    MAX_CONTENT_LENGTH=20 * 1024 * 1024,  # Giới hạn upload tối đa 20MB / request
+)
+
+# Nén response (JSON, HTML) bằng gzip để giảm dung lượng truyền tải -> tải nhanh hơn
+Compress(app)
+
+# Giới hạn số lần thử đăng nhập để chống brute-force mật khẩu
+limiter = Limiter(get_remote_address, app=app, default_limits=[], storage_uri="memory://")
 
 # Lấy chuỗi kết nối bảo mật từ biến môi trường
 DATABASE_URL = os.environ.get('DATABASE_URL')
+
+# Connection pool tới Postgres/Neon: tái sử dụng kết nối thay vì mở kết nối
+# TCP/TLS mới cho MỖI request (việc mở mới rất tốn thời gian, đặc biệt với
+# Neon/serverless Postgres) -> tăng tốc đáng kể cho mọi API.
+db_pool = pg_pool.SimpleConnectionPool(1, 10, DATABASE_URL, cursor_factory=RealDictCursor)
 
 # Số ngày lưu trữ dữ liệu "Chi tiết PO" trước khi tự động dọn dẹp
 PO_DETAIL_RETENTION_DAYS = 120
@@ -23,7 +62,7 @@ PO_DETAIL_RETENTION_DAYS = 120
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        db = g._database = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        db = g._database = db_pool.getconn()
     return db
 
 
@@ -31,7 +70,11 @@ def get_db():
 def close_connection(exception):
     db = getattr(g, '_database', None)
     if db is not None:
-        db.close()
+        # Nếu có lỗi xảy ra giữa request mà chưa rollback, trả kết nối bẩn về
+        # pool sẽ làm hỏng transaction của request tiếp theo dùng lại nó.
+        if exception is not None:
+            db.rollback()
+        db_pool.putconn(db)
 
 
 def init_db():
@@ -147,7 +190,13 @@ def init_db():
                 ('NS5', 'ns5123', 'store', 'NS5'),
                 ('NSM1', 'nsm1123', 'store', 'NSM1'),
             ]
-            cursor.executemany("INSERT INTO users (username, password, role, store_code) VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING", default_users)
+            # Mật khẩu mặc định chỉ dùng cho lần khởi tạo đầu tiên - LƯU DƯỚI
+            # DẠNG HASH ngay từ đầu (không lưu plain text). Sau khi deploy,
+            # nên đổi ngay các mật khẩu mặc định này qua trang Quản lý user.
+            default_users_hashed = [
+                (u, generate_password_hash(p), r, s) for (u, p, r, s) in default_users
+            ]
+            cursor.executemany("INSERT INTO users (username, password, role, store_code) VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING", default_users_hashed)
 
         db.commit()
         cursor.close()
@@ -652,7 +701,8 @@ def cleanup_old_po_detail(cursor):
     ngày. Các dữ liệu khác (Danh sách PO, Chi tiết nhận hàng, users...) không
     bị ảnh hưởng."""
     cursor.execute(
-        "DELETE FROM po_detail_items WHERE upload_time < NOW() - INTERVAL '%s days'" % PO_DETAIL_RETENTION_DAYS
+        "DELETE FROM po_detail_items WHERE upload_time < NOW() - (%s || ' days')::interval",
+        (PO_DETAIL_RETENTION_DAYS,)
     )
 
 
@@ -798,6 +848,45 @@ def compute_result_for_store(cursor, store_code):
     return result_df.to_dict(orient='records')
 
 
+# Cache đơn giản trong bộ nhớ (RAM) của tiến trình app: /api/data trước đây
+# tính lại toàn bộ bảng đối soát (đọc JSON lớn + merge bằng pandas) MỖI LẦN
+# được gọi, kể cả khi dữ liệu không hề thay đổi giữa 2 lần gọi liên tiếp
+# (ví dụ do polling hoặc bấm refresh nhiều lần). Vì đã có sẵn cơ chế đánh
+# dấu "phiên bản dữ liệu" (data_version) dùng cho /api/version, ta tái sử
+# dụng chính giá trị đó làm khoá cache: chỉ tính lại khi có upload mới.
+_result_cache = {}
+_result_cache_version = None
+
+
+def get_global_data_version(cursor):
+    """Trả về mốc thời gian mới nhất trong 3 nguồn dữ liệu ảnh hưởng tới
+    bảng đối soát (Danh sách PO / Chi tiết nhận hàng / Chi tiết PO) ở TẤT CẢ
+    cửa hàng. Dùng chung cho /api/version và cache của /api/data."""
+    cursor.execute('''
+        SELECT GREATEST(
+            COALESCE((SELECT MAX(ds_po_upload_time) FROM latest_uploads), 'epoch'::timestamp),
+            COALESCE((SELECT MAX(receipt_upload_time) FROM latest_uploads), 'epoch'::timestamp),
+            COALESCE((SELECT MAX(upload_time) FROM po_detail_items), 'epoch'::timestamp)
+        ) AS v
+    ''')
+    return cursor.fetchone()['v']
+
+
+def compute_result_for_store_cached(cursor, store_code, version):
+    """Giống compute_result_for_store nhưng có cache theo store_code, tự
+    động bỏ toàn bộ cache cũ khi phát hiện version dữ liệu đã đổi (có upload
+    mới ở bất kỳ cửa hàng nào)."""
+    global _result_cache, _result_cache_version
+    if _result_cache_version != version:
+        _result_cache = {}
+        _result_cache_version = version
+    if store_code in _result_cache:
+        return _result_cache[store_code]
+    data = compute_result_for_store(cursor, store_code)
+    _result_cache[store_code] = data
+    return data
+
+
 # ----------------------------------------------------------------------------
 # Routes & Endpoints
 # ----------------------------------------------------------------------------
@@ -810,21 +899,27 @@ def index():
 
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute")
 def login():
     if request.method == 'POST':
-        username = request.form.get('username').strip()
-        password = request.form.get('password').strip()
+        username = (request.form.get('username') or '').strip()
+        password = (request.form.get('password') or '').strip()
 
         db = get_db()
         cursor = db.cursor()
-        cursor.execute("SELECT * FROM users WHERE username = %s AND password = %s", (username, password))
+        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
         user = cursor.fetchone()
         cursor.close()
 
-        if user:
+        # So sánh mật khẩu bằng hash (werkzeug tự dùng thuật toán so sánh an
+        # toàn, chống timing attack) thay vì so sánh chuỗi plain text trực
+        # tiếp trong câu lệnh SQL như trước.
+        if user and check_password_hash(user['password'], password):
+            session.clear()
             session['user'] = user['username']
             session['role'] = user['role']
             session['store_code'] = user['store_code']
+            session.permanent = True
             return redirect(url_for('index'))
         else:
             return render_template('login.html', error="Sai tên đăng nhập hoặc mật khẩu!")
@@ -1037,14 +1132,7 @@ def get_version():
 
     # Dashboard/Kết quả đối soát: đổi khi có upload mới (Danh sách PO, Chi
     # tiết nhận hàng, hoặc Chi tiết PO) ở bất kỳ cửa hàng nào.
-    cursor.execute('''
-        SELECT GREATEST(
-            COALESCE((SELECT MAX(ds_po_upload_time) FROM latest_uploads), 'epoch'::timestamp),
-            COALESCE((SELECT MAX(receipt_upload_time) FROM latest_uploads), 'epoch'::timestamp),
-            COALESCE((SELECT MAX(upload_time) FROM po_detail_items), 'epoch'::timestamp)
-        ) AS v
-    ''')
-    data_version = cursor.fetchone()['v']
+    data_version = get_global_data_version(cursor)
 
     cursor.execute('SELECT MAX(id) AS v FROM upload_log')
     history_version = cursor.fetchone()['v']
@@ -1091,6 +1179,11 @@ def get_data():
     cleanup_old_po_detail(cursor)
     db.commit()
 
+    # Lấy version dữ liệu hiện tại 1 lần, dùng làm khoá cache cho toàn bộ
+    # request này (tránh tính lại pandas merge nếu không có gì thay đổi kể
+    # từ lần gọi trước).
+    version = get_global_data_version(cursor)
+
     combined_data = []
 
     if target_store == 'ALL' and role == 'admin':
@@ -1104,12 +1197,12 @@ def get_data():
         store_codes = [r['store_code'] for r in cursor.fetchall()]
 
         for sc in store_codes:
-            items = compute_result_for_store(cursor, sc)
+            items = compute_result_for_store_cached(cursor, sc, version)
             for itm in items:
                 itm['store_code'] = sc
                 combined_data.append(itm)
     else:
-        items = compute_result_for_store(cursor, target_store)
+        items = compute_result_for_store_cached(cursor, target_store, version)
         for itm in items:
             itm['store_code'] = target_store
             combined_data.append(itm)
@@ -1155,7 +1248,8 @@ def admin_users():
         username = data.get('username')
         new_password = data.get('password')
         if username and new_password:
-            cursor.execute("UPDATE users SET password = %s WHERE username = %s", (new_password, username))
+            hashed_password = generate_password_hash(new_password)
+            cursor.execute("UPDATE users SET password = %s WHERE username = %s", (hashed_password, username))
             db.commit()
             cursor.close()
             return jsonify({'success': True})
