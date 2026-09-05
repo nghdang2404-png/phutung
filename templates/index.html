@@ -278,8 +278,8 @@
                                 <th>Mã Phụ Tùng</th>
                                 <th class="text-center">Trạng Thái</th>
                                 <th class="text-end">Số Ngày</th>
-                                <th class="text-end">Nợ theo đơn</th>
-                                <th class="text-end">Tổng nợ</th>
+                                <th class="text-end">Số Lượng Nợ</th>
+                                <th class="text-end">Cộng Dồn Theo Phụ Tùng</th>
                             </tr>
                         </thead>
                         <tbody id="result-body">
@@ -607,11 +607,17 @@
                 const res = await fetch('/api/upload', { method: 'POST', body: formData });
                 const result = await res.json();
                 if(res.ok) {
-                    if (result.warning) {
-                        alert('Đã tải lên thành công.\n\n' + result.warning);
-                    } else {
-                        alert('Tải lên và đối soát thành công!');
+                    let messages = [];
+                    if (result.po_detail_inserted !== undefined && result.po_detail_inserted !== null) {
+                        messages.push(`Chi tiết PO: đã ghi thêm ${result.po_detail_inserted.toLocaleString()} dòng mới.`);
+                        if (result.po_detail_skipped > 0) {
+                            messages.push(`Đã bỏ qua ${result.po_detail_skipped.toLocaleString()} dòng trùng lặp (đã tồn tại sẵn theo Mã PO + Mã phụ tùng + Số lượng).`);
+                        }
                     }
+                    if (result.warning) {
+                        messages.push(result.warning);
+                    }
+                    alert('Tải lên và đối soát thành công!' + (messages.length ? '\n\n' + messages.join('\n') : ''));
                     loadData();
                     new bootstrap.Tab(document.getElementById('report-tab')).show();
                 } else { alert('Lỗi: ' + result.error); }

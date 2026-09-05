@@ -79,20 +79,29 @@ def init_db():
         # 4. Bảng lưu dữ liệu "Chi tiết PO" theo kiểu CỘNG DỒN (append).
         #    Mỗi dòng dữ liệu được lưu kèm thời điểm nhập (upload_time) để
         #    có thể tự động xoá các dòng đã nhập quá 120 ngày mà không ảnh
-        #    hưởng tới các dữ liệu khác.
+        #    hưởng tới các dữ liệu khác. Cột "quantity" dùng để phát hiện
+        #    trùng lặp (Mã PO + Mã phụ tùng + Số lượng) khi ghi thêm dữ liệu.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS po_detail_items (
                 id SERIAL PRIMARY KEY,
                 store_code VARCHAR(20) NOT NULL,
                 po_code VARCHAR(100) NOT NULL,
                 part_code VARCHAR(100) NOT NULL,
+                quantity NUMERIC,
                 row_json TEXT NOT NULL,
                 filename TEXT,
                 upload_time TIMESTAMP NOT NULL
             )
         ''')
+        # Đảm bảo cột "quantity" tồn tại kể cả với CSDL đã tạo từ trước
+        # (khi bảng po_detail_items đã có sẵn nhưng chưa có cột này).
+        cursor.execute('ALTER TABLE po_detail_items ADD COLUMN IF NOT EXISTS quantity NUMERIC')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_po_detail_store ON po_detail_items(store_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_po_detail_upload_time ON po_detail_items(upload_time)')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_po_detail_dedup
+            ON po_detail_items(store_code, po_code, part_code, quantity)
+        ''')
 
         # 5. Seed default users nếu chưa có
         cursor.execute("SELECT COUNT(*) FROM users")
@@ -527,30 +536,68 @@ def save_receipt(cursor, store_code, receipt_file, receipt_df, upload_time):
 
 
 def append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_time):
-    """Chi tiết PO: GHI THÊM vào dữ liệu cũ (không xoá gì cả). Việc dọn dẹp
-    dữ liệu quá hạn 120 ngày được xử lý riêng ở cleanup_old_po_detail()."""
+    """Chi tiết PO: GHI THÊM vào dữ liệu cũ (không xoá gì cả), NHƯNG sẽ tự
+    động kiểm tra và BỎ QUA (không ghi vào CSDL) các dòng đã tồn tại sẵn -
+    xác định trùng lặp dựa trên bộ 3 giá trị (Mã PO, Mã phụ tùng, Số lượng)
+    của cùng 1 cửa hàng. Việc kiểm tra này áp dụng cho cả:
+      - Dữ liệu đã có sẵn trong CSDL từ các lần tải trước.
+      - Các dòng trùng lặp ngay trong chính file đang tải lên lần này.
+    Việc dọn dẹp dữ liệu quá hạn 120 ngày được xử lý riêng ở
+    cleanup_old_po_detail().
+
+    Trả về (số dòng đã ghi thêm, số dòng bị bỏ qua vì trùng lặp)."""
     detail_po_col = find_col(po_detail_df.columns, ['order number', 'mã đơn hàng mua', 'mã đơn hàng', 'mã po', 'po'])
     detail_part_col = find_col(po_detail_df.columns, ['part#', 'part #', 'part number', 'mã phụ tùng', 'part'])
+    detail_qty_col = find_col(po_detail_df.columns, ['quantity requested', 'số lượng yêu cầu', 'số lượng', 'quantity'])
 
     if not detail_po_col or not detail_part_col:
         raise ValueError("File Chi tiết PO thiếu cột 'Mã PO' hoặc 'Mã phụ tùng'.")
+    if not detail_qty_col:
+        raise ValueError("File Chi tiết PO thiếu cột 'Số lượng' (Quantity Requested).")
+
+    # Lấy trước các bộ (Mã PO, Mã phụ tùng, Số lượng) đã có sẵn trong CSDL
+    # của cửa hàng này để so sánh, tránh phải query từng dòng một (chậm).
+    cursor.execute(
+        "SELECT po_code, part_code, quantity FROM po_detail_items WHERE store_code = %s",
+        (store_code,)
+    )
+    existing_keys = set()
+    for r in cursor.fetchall():
+        qty = float(r['quantity']) if r['quantity'] is not None else 0.0
+        existing_keys.add((r['po_code'], r['part_code'], qty))
 
     rows_to_insert = []
+    seen_in_batch = set()
+    skipped_count = 0
+
     for _, row in po_detail_df.iterrows():
         po_code = clean_str(row[detail_po_col])
         part_code = clean_str(row[detail_part_col])
         if not po_code or not part_code:
             continue
+
+        qty_val = float(parse_qty(row[detail_qty_col]))
+        key = (po_code, part_code, qty_val)
+
+        # Bỏ qua nếu bộ (Mã PO, Mã phụ tùng, Số lượng) này đã tồn tại trong
+        # CSDL, hoặc đã xuất hiện trước đó ngay trong file đang tải lên.
+        if key in existing_keys or key in seen_in_batch:
+            skipped_count += 1
+            continue
+        seen_in_batch.add(key)
+
         row_json = json.dumps(row.to_dict(), ensure_ascii=False, default=str)
-        rows_to_insert.append((store_code, po_code, part_code, row_json, po_detail_file.filename, upload_time))
+        rows_to_insert.append((store_code, po_code, part_code, qty_val, row_json, po_detail_file.filename, upload_time))
 
     if rows_to_insert:
         execute_values(
             cursor,
-            '''INSERT INTO po_detail_items (store_code, po_code, part_code, row_json, filename, upload_time)
+            '''INSERT INTO po_detail_items (store_code, po_code, part_code, quantity, row_json, filename, upload_time)
                VALUES %s''',
             rows_to_insert
         )
+
+    return len(rows_to_insert), skipped_count
 
 
 def load_store_dataframes(cursor, store_code):
@@ -675,10 +722,14 @@ def upload_files():
             receipt_df = read_any(receipt_file)
             save_receipt(cursor, store_code, receipt_file, receipt_df, upload_time)
 
-        # 3) Chi tiết PO: nếu có file mới thì ghi thêm vào dữ liệu cũ (cộng dồn)
+        # 3) Chi tiết PO: nếu có file mới thì ghi thêm vào dữ liệu cũ (cộng
+        #    dồn), tự động bỏ qua các dòng đã trùng (Mã PO + Mã phụ tùng +
+        #    Số lượng) để tránh ghi lặp vào CSDL.
+        po_detail_inserted = None
+        po_detail_skipped = None
         if po_detail_file:
             po_detail_df = read_any(po_detail_file)
-            append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_time)
+            po_detail_inserted, po_detail_skipped = append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_time)
 
         # 4) Dọn dẹp dữ liệu Chi tiết PO đã quá 120 ngày (các dữ liệu khác giữ nguyên)
         cleanup_old_po_detail(cursor)
@@ -703,6 +754,12 @@ def upload_files():
         cursor.close()
 
         response = {'success': True, 'data': data_dicts, 'summary': summary, 'upload_time': upload_time_str}
+
+        # Thông báo cho cửa hàng biết số dòng "Chi tiết PO" đã được ghi mới
+        # và số dòng bị bỏ qua vì đã tồn tại (trùng Mã PO + Mã phụ tùng + Số lượng).
+        if po_detail_file is not None:
+            response['po_detail_inserted'] = po_detail_inserted
+            response['po_detail_skipped'] = po_detail_skipped
 
         # Nếu cửa hàng chưa từng có đủ "Danh sách PO" + "Chi tiết nhận hàng"
         # (ví dụ đây là lần tải đầu tiên và chỉ chọn mỗi file Chi tiết PO),
