@@ -95,7 +95,7 @@ def find_col(columns, patterns):
 def read_any(file_storage):
     """
     Hàm đọc file thông minh: Tự động nhận diện file Excel hoặc tự động thử 
-    các bảng mã của file CSV để chống triệt để lỗi 'utf-8 codec can't decode'.
+    các bảng mã của file CSV để chống lỗi mã hóa.
     """
     filename = (file_storage.filename or "").lower()
     
@@ -117,10 +117,10 @@ def read_any(file_storage):
             except Exception:
                 continue
         
-        # Nếu vẫn không đọc được, dùng latin1 ép buộc đọc qua các ký tự lỗi
+        # Nếu vẫn không đọc được, dùng latin1 (đã bao quát toàn bộ byte, không cần errors='ignore')
         if df is None:
             file_storage.seek(0)
-            df = pd.read_csv(file_storage, encoding='latin1', errors='ignore')
+            df = pd.read_csv(file_storage, encoding='latin1')
     else:
         # Trường hợp định dạng khác, thử đọc như Excel trước, lỗi thì đọc như CSV
         try:
@@ -128,7 +128,7 @@ def read_any(file_storage):
             df = pd.read_excel(file_storage)
         except Exception:
             file_storage.seek(0)
-            df = pd.read_csv(file_storage, encoding='latin1', errors='ignore')
+            df = pd.read_csv(file_storage, encoding='latin1')
 
     df.columns = [str(c).strip() for c in df.columns]
     return df
