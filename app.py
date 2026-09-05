@@ -184,27 +184,86 @@ def read_csv_robust(file_storage):
     raise ValueError(f"Không thể đọc được file CSV (định dạng/bảng mã không hợp lệ). Chi tiết: {last_err}")
 
 
+# Các từ khoá tiêu đề cột thường gặp trong 3 loại file (Danh sách PO,
+# Chi tiết PO, Chi tiết nhận hàng). Dùng để dò đúng dòng header thật khi
+# file Excel/CSV có vài dòng tiêu đề/giới thiệu rác phía trên.
+_HEADER_KEYWORDS = [
+    'order number', 'mã đơn hàng mua', 'mã đơn hàng', 'mã po', 'po number',
+    'siebel po number', 'part#', 'part #', 'part number', 'mã phụ tùng',
+    'quantity requested', 'ngày tạo đơn hàng mua', 'ngày tạo', 'ngày đặt',
+    'ngày gửi đơn đặt hàng', 'trạng thái đơn hàng mua', 'trạng thái đơn hàng',
+    'trạng thái po', 'mrn status', 'trạng thái', 'status', 'part',
+]
+
+
+def _clean_col_name(c):
+    # Loại bỏ khoảng trắng thường + khoảng trắng không ngắt dòng (\xa0) + BOM
+    return str(c).replace('\ufeff', '').replace('\xa0', ' ').strip()
+
+
+def _find_best_header_row(raw_df, max_scan=10):
+    """Quét (tối đa) max_scan dòng đầu của 1 DataFrame đọc thô (header=None)
+    để tìm dòng nào giống dòng tiêu đề cột nhất, dựa trên số từ khoá cột
+    quen thuộc xuất hiện trong dòng đó."""
+    best_idx, best_score = None, 0
+    for i in range(min(max_scan, len(raw_df))):
+        row_vals = [_clean_col_name(v).lower() for v in raw_df.iloc[i].tolist()]
+        score = sum(1 for kw in _HEADER_KEYWORDS if any(kw in v for v in row_vals))
+        if score > best_score:
+            best_score, best_idx = score, i
+    return best_idx if best_score > 0 else None
+
+
+def _looks_like_bad_header(df):
+    """True nếu phần lớn tên cột bị đọc sai (dạng 'Unnamed: n' hoặc rỗng),
+    dấu hiệu cho thấy dòng header thật không phải dòng đầu tiên."""
+    if df is None or df.shape[1] == 0:
+        return True
+    bad = sum(1 for c in df.columns if str(c).strip() == '' or str(c).startswith('Unnamed'))
+    return bad / df.shape[1] > 0.3
+
+
 def read_any(file_storage):
     """
     Hàm đọc file thông minh: Tự động nhận diện file Excel hoặc tự động thử
     các bảng mã/định dạng của file CSV để chống lỗi mã hóa và lỗi cấu trúc.
+    Đồng thời tự động dò đúng dòng tiêu đề thật nếu phía trên có vài dòng
+    tiêu đề/giới thiệu rác (áp dụng cho cả Excel lẫn CSV).
     """
     filename = (file_storage.filename or "").lower()
 
-    if filename.endswith(('.xlsx', '.xls')):
+    def _read_excel_smart():
+        file_storage.seek(0)
         df = pd.read_excel(file_storage)
+        if _looks_like_bad_header(df):
+            file_storage.seek(0)
+            raw = pd.read_excel(file_storage, header=None)
+            header_idx = _find_best_header_row(raw)
+            if header_idx is not None:
+                file_storage.seek(0)
+                df = pd.read_excel(file_storage, header=header_idx)
+        return df
+
+    if filename.endswith(('.xlsx', '.xls')):
+        df = _read_excel_smart()
     elif filename.endswith('.csv'):
         df = read_csv_robust(file_storage)
+        if _looks_like_bad_header(df):
+            file_storage.seek(0)
+            raw = pd.read_csv(file_storage, sep=None, engine='python', header=None)
+            header_idx = _find_best_header_row(raw)
+            if header_idx is not None:
+                file_storage.seek(0)
+                df = pd.read_csv(file_storage, sep=None, engine='python', header=header_idx)
     else:
         # Trường hợp định dạng khác, thử đọc như Excel trước, lỗi thì đọc như CSV
         try:
-            file_storage.seek(0)
-            df = pd.read_excel(file_storage)
+            df = _read_excel_smart()
         except Exception:
             file_storage.seek(0)
             df = read_csv_robust(file_storage)
 
-    df.columns = [str(c).strip() for c in df.columns]
+    df.columns = [_clean_col_name(c) for c in df.columns]
     return df
 
 
@@ -630,6 +689,38 @@ def admin_users():
     users = [dict(row) for row in cursor.fetchall()]
     cursor.close()
     return jsonify({'success': True, 'users': users})
+
+
+@app.route('/api/admin/delete-store-data', methods=['POST'])
+def delete_store_data():
+    """Xoá SẠCH toàn bộ dữ liệu PO đã lưu (Danh sách PO, Chi tiết PO, Chi
+    tiết nhận hàng và lịch sử tải lên) của MỘT chi nhánh cụ thể.
+    Không xoá tài khoản đăng nhập (bảng users) của chi nhánh đó."""
+    if 'user' not in session or session['role'] != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    data = request.json or {}
+    store_code = (data.get('store_code') or '').strip()
+
+    db = get_db()
+    cursor = db.cursor()
+
+    # Chỉ cho phép xoá các chi nhánh (role = 'store') có thật trong hệ thống,
+    # tránh xoá nhầm do dữ liệu gửi lên sai hoặc bị chỉnh sửa.
+    cursor.execute("SELECT DISTINCT store_code FROM users WHERE role = 'store'")
+    valid_stores = {r['store_code'] for r in cursor.fetchall()}
+
+    if not store_code or store_code not in valid_stores:
+        cursor.close()
+        return jsonify({'error': 'Cửa hàng không hợp lệ'}), 400
+
+    cursor.execute("DELETE FROM po_detail_items WHERE store_code = %s", (store_code,))
+    cursor.execute("DELETE FROM latest_uploads WHERE store_code = %s", (store_code,))
+    cursor.execute("DELETE FROM upload_log WHERE store_code = %s", (store_code,))
+    db.commit()
+    cursor.close()
+
+    return jsonify({'success': True, 'store_code': store_code})
 
 
 if __name__ == '__main__':

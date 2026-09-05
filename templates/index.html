@@ -382,6 +382,30 @@
                     </table>
                 </div>
             </div>
+
+            <div class="card card-custom p-3 p-md-4 mt-3 mt-md-4 border border-danger-subtle">
+                <h5 class="fw-bold mb-1 fs-6 fs-md-5 text-danger"><i class="bi bi-trash3-fill me-2"></i>Xoá Dữ Liệu Theo Chi Nhánh</h5>
+                <p class="text-muted small mb-3">Thao tác này sẽ <strong>xoá vĩnh viễn</strong> toàn bộ dữ liệu Danh sách PO, Chi tiết PO, Chi tiết nhận hàng và lịch sử tải lên của chi nhánh được chọn. Tài khoản đăng nhập của chi nhánh <strong>không</strong> bị ảnh hưởng. Hành động này <strong>không thể hoàn tác</strong>.</p>
+                <div class="row g-2 align-items-end">
+                    <div class="col-12 col-sm-6 col-md-4">
+                        <label class="form-label fw-semibold small mb-1">Chọn chi nhánh cần xoá dữ liệu:</label>
+                        <select id="delete-store-select" class="form-select border-danger-subtle">
+                            <option value="">-- Chọn chi nhánh --</option>
+                            <option value="NS1">Cửa hàng NS1</option>
+                            <option value="NS2">Cửa hàng NS2</option>
+                            <option value="NS3">Cửa hàng NS3</option>
+                            <option value="NS4">Cửa hàng NS4</option>
+                            <option value="NS5">Cửa hàng NS5</option>
+                            <option value="NSM1">Cửa hàng NSM1</option>
+                        </select>
+                    </div>
+                    <div class="col-12 col-sm-6 col-md-4">
+                        <button type="button" class="btn btn-danger fw-semibold w-100" onclick="openDeleteDataModal()">
+                            <i class="bi bi-trash3 me-1"></i> Xoá Sạch Dữ Liệu
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
         {% endif %}
 
@@ -403,6 +427,27 @@
                     <input type="password" id="new-password-input" class="form-control" placeholder="Nhập mật khẩu mới...">
                 </div>
                 <button type="button" class="btn btn-danger w-100 fw-semibold" onclick="submitNewPassword()">Xác Nhận Đổi Mật Khẩu</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Xoá Dữ Liệu Chi Nhánh -->
+<div class="modal fade" id="deleteDataModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title fw-bold fs-6"><i class="bi bi-exclamation-triangle-fill me-2"></i>Xác Nhận Xoá Dữ Liệu</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-3 p-md-4">
+                <p class="mb-2">Bạn sắp <strong class="text-danger">xoá vĩnh viễn</strong> toàn bộ dữ liệu PO của chi nhánh:</p>
+                <h5 class="fw-bold text-danger mb-3" id="delete-modal-store-name">--</h5>
+                <p class="small text-muted mb-3">Hành động này không thể hoàn tác. Để xác nhận, vui lòng nhập chính xác mã chi nhánh vào ô bên dưới:</p>
+                <input type="text" id="delete-confirm-input" class="form-control mb-3" placeholder="Nhập mã chi nhánh để xác nhận...">
+                <button type="button" class="btn btn-danger w-100 fw-semibold" id="delete-confirm-btn" onclick="submitDeleteStoreData()" disabled>
+                    <i class="bi bi-trash3-fill me-1"></i> Xác Nhận Xoá Sạch Dữ Liệu
+                </button>
             </div>
         </div>
     </div>
@@ -627,6 +672,60 @@
         alert('Lỗi kết nối đến server.');
     }
 }
+
+    let pendingDeleteStore = '';
+
+    function openDeleteDataModal() {
+        const select = document.getElementById('delete-store-select');
+        const store = select.value;
+        if (!store) {
+            alert('Vui lòng chọn chi nhánh cần xoá dữ liệu!');
+            return;
+        }
+        pendingDeleteStore = store;
+        document.getElementById('delete-modal-store-name').innerText = store;
+        const confirmInput = document.getElementById('delete-confirm-input');
+        confirmInput.value = '';
+        document.getElementById('delete-confirm-btn').disabled = true;
+        new bootstrap.Modal(document.getElementById('deleteDataModal')).show();
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const confirmInput = document.getElementById('delete-confirm-input');
+        if (confirmInput) {
+            confirmInput.addEventListener('input', () => {
+                document.getElementById('delete-confirm-btn').disabled =
+                    confirmInput.value.trim().toUpperCase() !== pendingDeleteStore.toUpperCase();
+            });
+        }
+    });
+
+    async function submitDeleteStoreData() {
+        if (!pendingDeleteStore) return;
+        try {
+            const res = await fetch('/api/admin/delete-store-data', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ store_code: pendingDeleteStore })
+            });
+            const result = await res.json();
+
+            if (res.ok && result.success) {
+                alert(`Đã xoá sạch dữ liệu của chi nhánh ${pendingDeleteStore}.`);
+                const modalEl = document.getElementById('deleteDataModal');
+                const modal = bootstrap.Modal.getInstance(modalEl);
+                if (modal) modal.hide();
+                document.getElementById('delete-store-select').value = '';
+                loadData();
+                loadHistory();
+            } else {
+                alert('Lỗi: ' + (result.error || 'Không thể xoá dữ liệu'));
+            }
+        } catch (e) {
+            console.error(e);
+            alert('Lỗi kết nối đến server.');
+        }
+    }
 
     function setupDragZones() {
         const fileInputs = [
