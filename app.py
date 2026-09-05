@@ -898,6 +898,37 @@ def index():
     return render_template('index.html', user=session['user'], role=session['role'], store_code=session['store_code'])
 
 
+def _is_hashed_password(stored_value):
+    """Nhận diện mật khẩu đã được hash bằng werkzeug (các thuật toán werkzeug
+    hỗ trợ đều lưu dưới dạng 'method:params$salt$hash', ví dụ
+    'pbkdf2:sha256:...' hoặc 'scrypt:...'). Mật khẩu cũ (từ trước khi áp
+    dụng hash) là chuỗi thường, không có dạng này."""
+    return isinstance(stored_value, str) and stored_value.startswith(('pbkdf2:', 'scrypt:', 'argon2:'))
+
+
+def verify_and_upgrade_password(cursor, db, user, password):
+    """Kiểm tra mật khẩu, hỗ trợ cả 2 trường hợp:
+    - Mật khẩu đã hash (trường hợp bình thường) -> so sánh bằng check_password_hash.
+    - Mật khẩu cũ còn plain text (tài khoản tạo/đổi từ trước khi nâng cấp
+      bảo mật) -> so sánh trực tiếp, và nếu đúng thì TỰ ĐỘNG cập nhật lại
+      thành dạng hash ngay trong DB, để những lần đăng nhập sau không còn
+      là plain text nữa. Không cần chạy migration riêng, không mất tài
+      khoản nào - mỗi user chỉ cần đăng nhập lại 1 lần là tự nâng cấp."""
+    stored = user['password']
+
+    if _is_hashed_password(stored):
+        return check_password_hash(stored, password)
+
+    # Mật khẩu cũ dạng plain text
+    if stored == password:
+        new_hash = generate_password_hash(password)
+        cursor.execute("UPDATE users SET password = %s WHERE username = %s", (new_hash, user['username']))
+        db.commit()
+        return True
+
+    return False
+
+
 @app.route('/login', methods=['GET', 'POST'])
 @limiter.limit("10 per minute")
 def login():
@@ -909,12 +940,11 @@ def login():
         cursor = db.cursor()
         cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
         user = cursor.fetchone()
-        cursor.close()
 
-        # So sánh mật khẩu bằng hash (werkzeug tự dùng thuật toán so sánh an
-        # toàn, chống timing attack) thay vì so sánh chuỗi plain text trực
-        # tiếp trong câu lệnh SQL như trước.
-        if user and check_password_hash(user['password'], password):
+        # So sánh mật khẩu (tự hỗ trợ nâng cấp tài khoản cũ còn plain text
+        # lên hash ngay khi đăng nhập thành công - xem verify_and_upgrade_password).
+        if user and verify_and_upgrade_password(cursor, db, user, password):
+            cursor.close()
             session.clear()
             session['user'] = user['username']
             session['role'] = user['role']
@@ -922,6 +952,7 @@ def login():
             session.permanent = True
             return redirect(url_for('index'))
         else:
+            cursor.close()
             return render_template('login.html', error="Sai tên đăng nhập hoặc mật khẩu!")
     return render_template('login.html')
 
