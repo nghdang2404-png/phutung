@@ -103,7 +103,38 @@ def init_db():
             ON po_detail_items(store_code, po_code, part_code, quantity)
         ''')
 
-        # 5. Seed default users nếu chưa có
+        # 5. Bảng lưu TỒN KHO HỆ THỐNG (dạng "dài": mỗi dòng là 1 mã hàng
+        #    tại 1 cửa hàng). Đây là dữ liệu kiểu "ghi đè toàn bộ" mỗi lần
+        #    admin tải file tồn kho mới lên (khác với po_detail_items là
+        #    cộng dồn) - vì tồn kho là số liệu cuối kỳ tại 1 thời điểm, tải
+        #    file mới nghĩa là thay hoàn toàn số liệu cũ.
+        #    store_code ở đây dùng đúng giá trị NS1..NS5, NSM1 như bảng users.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS inventory_items (
+                id SERIAL PRIMARY KEY,
+                part_code VARCHAR(100) NOT NULL,
+                part_name TEXT,
+                unit VARCHAR(50),
+                store_code VARCHAR(20) NOT NULL,
+                quantity NUMERIC NOT NULL DEFAULT 0
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_inventory_part ON inventory_items(part_code)')
+
+        # 6. Bảng lưu thông tin lần tải file tồn kho gần nhất (chỉ 1 dòng
+        #    duy nhất, luôn bị ghi đè - phục vụ hiển thị "Cập nhật lần cuối").
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS inventory_meta (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                filename TEXT,
+                uploaded_by VARCHAR(50),
+                upload_time TIMESTAMP,
+                total_parts INTEGER,
+                skipped_rows INTEGER
+            )
+        ''')
+
+        # 7. Seed default users nếu chưa có
         cursor.execute("SELECT COUNT(*) FROM users")
         count = cursor.fetchone()['count']
         if count == 0:
@@ -292,6 +323,128 @@ def read_any(file_storage):
 
     df.columns = [_clean_col_name(c) for c in df.columns]
     return df
+
+
+# ----------------------------------------------------------------------------
+# TỒN KHO HỆ THỐNG - import file "Tổng hợp tồn kho"
+# ----------------------------------------------------------------------------
+
+# Chỉ lấy các mã kho thuộc 3 nhóm này (tiền tố), các mã kho khác (KBD, KX,
+# KKM, KHO151, KHONDAKM, KHANGCHAMBAN, ...PI2...) sẽ bị bỏ qua.
+_INVENTORY_ALLOWED_PREFIXES = {'KPT', 'KPK', 'KPTN'}
+# Hậu tố tương ứng với 6 cửa hàng - trùng với store_code trong bảng users.
+_INVENTORY_ALLOWED_STORES = {'NS1', 'NS2', 'NS3', 'NS4', 'NS5', 'NSM1'}
+
+
+def _split_warehouse_code(raw_kho):
+    """Tách 'KPT NS1' -> ('KPT', 'NS1'). Trả về (None, None) nếu không đúng
+    định dạng "TIỀN TỐ HẬU TỐ" (ví dụ dòng 'Tổng cộng')."""
+    parts = str(raw_kho).strip().upper().split()
+    if len(parts) != 2:
+        return None, None
+    return parts[0], parts[1]
+
+
+def parse_inventory_excel(file_storage):
+    """
+    Đọc file "Tổng hợp tồn kho" (định dạng đặc thù: 2-3 dòng tiêu đề rác phía
+    trên + 2 dòng header bị merge ô + dữ liệu). Không dùng read_any() thông
+    thường vì cấu trúc header ở đây khác hẳn (2 dòng header lồng nhau kiểu
+    "Cuối kỳ" -> "Số lượng"/"Giá trị").
+
+    Tự động dò:
+      - Dòng header chính (dòng có ô đầu tiên là "Mã kho").
+      - Cột "Cuối kỳ" - "Số lượng" bằng cách quét 2 dòng header, không hardcode
+        cứng theo số thứ tự cột (K), để không bị vỡ nếu form Excel đổi bố cục.
+
+    Trả về danh sách dict: {part_code, part_name, unit, store_code, quantity}
+    (đã lọc chỉ giữ mã kho thuộc 18 mã cho phép), kèm số dòng bị bỏ qua và
+    danh sách cảnh báo (nếu 1 mã hàng bị trùng ở nhiều nhóm tiền tố khác
+    nhau - trường hợp hiếm, sẽ cộng dồn số lượng lại thay vì ghi đè).
+    """
+    file_storage.seek(0)
+    raw = pd.read_excel(file_storage, header=None, dtype=object)
+
+    # 1) Tìm dòng header chính: ô đầu tiên (đã strip/upper) = "MÃ KHO"
+    header_row = None
+    for i in range(min(15, len(raw))):
+        first_cell = raw.iat[i, 0]
+        if first_cell is not None and str(first_cell).strip().upper() == 'MÃ KHO':
+            header_row = i
+            break
+    if header_row is None:
+        raise ValueError('Không tìm thấy dòng tiêu đề "Mã kho" trong file. Vui lòng kiểm tra lại đúng file "Tổng hợp tồn kho".')
+
+    # 2) Dò cột "Cuối kỳ" - "Số lượng" bằng cách quét dòng header chính (tên
+    #    nhóm cột, ví dụ "Cuối kỳ" chỉ xuất hiện ở ô đầu tiên của nhóm do bị
+    #    merge - các ô còn lại là NaN) và dòng ngay dưới nó (tên cột con,
+    #    "Số lượng"/"Giá trị").
+    group_row = raw.iloc[header_row]
+    sub_row = raw.iloc[header_row + 1] if header_row + 1 < len(raw) else None
+
+    qty_col = None
+    current_group = ''
+    for c in range(raw.shape[1]):
+        cell = group_row.iat[c]
+        if cell is not None and str(cell).strip() != '' and str(cell).strip().lower() != 'nan':
+            current_group = str(cell).strip().lower()
+        if 'cuối kỳ' in current_group and sub_row is not None:
+            sub_cell = sub_row.iat[c]
+            if sub_cell is not None and 'số lượng' in str(sub_cell).strip().lower():
+                qty_col = c
+                break
+    if qty_col is None:
+        raise ValueError('Không tìm thấy cột "Cuối kỳ - Số lượng" trong file.')
+
+    # 3) Dữ liệu bắt đầu sau 2 dòng header (header_row + 2)
+    data_start = header_row + 2
+    kho_col, part_col, name_col, unit_col = 0, 1, 2, 3
+
+    # part_code -> {part_name, unit, quantities: {store_code: qty}}
+    parts_map = {}
+    skipped_rows = 0
+    warnings = []
+
+    for i in range(data_start, len(raw)):
+        raw_kho = raw.iat[i, kho_col]
+        raw_part = raw.iat[i, part_col]
+        if raw_kho is None or raw_part is None or str(raw_kho).strip() == '' or str(raw_part).strip() == '':
+            continue
+
+        prefix, suffix = _split_warehouse_code(raw_kho)
+        if prefix not in _INVENTORY_ALLOWED_PREFIXES or suffix not in _INVENTORY_ALLOWED_STORES:
+            skipped_rows += 1
+            continue
+
+        part_code = str(raw_part).strip()
+        part_name = str(raw.iat[i, name_col]).strip() if raw.iat[i, name_col] is not None else ''
+        unit = str(raw.iat[i, unit_col]).strip() if raw.iat[i, unit_col] is not None else ''
+        qty = float(parse_qty(raw.iat[i, qty_col]))
+
+        entry = parts_map.setdefault(part_code, {'part_name': part_name, 'unit': unit, 'quantities': {}})
+        if suffix in entry['quantities']:
+            # Mã hàng này đã có số liệu ở cùng cửa hàng từ 1 nhóm tiền tố
+            # khác (hiếm khi xảy ra) -> cộng dồn lại thay vì ghi đè, đồng
+            # thời cảnh báo để admin kiểm tra thủ công nếu cần.
+            entry['quantities'][suffix] += qty
+            warnings.append(f'Mã hàng {part_code} tại {suffix} xuất hiện ở nhiều nhóm kho khác nhau - đã cộng dồn số lượng.')
+        else:
+            entry['quantities'][suffix] = qty
+
+    # Loại hẳn các mã hàng không có mặt ở bất kỳ mã kho nào trong 18 mã cho
+    # phép (đã tự động xảy ra vì parts_map chỉ được set khi mã kho hợp lệ).
+    rows = []
+    for part_code, entry in parts_map.items():
+        for store_code, qty in entry['quantities'].items():
+            rows.append({
+                'part_code': part_code,
+                'part_name': entry['part_name'],
+                'unit': entry['unit'],
+                'store_code': store_code,
+                'quantity': qty,
+            })
+
+    return rows, skipped_rows, warnings
 
 
 def get_summary_from_data(combined_data):
@@ -773,6 +926,150 @@ def upload_files():
         return jsonify(response)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/admin/upload-inventory', methods=['POST'])
+def upload_inventory():
+    """Admin tải file "Tổng hợp tồn kho" lên. Dữ liệu sẽ GHI ĐÈ TOÀN BỘ
+    (không cộng dồn) - vì đây là số liệu tồn cuối kỳ tại 1 thời điểm."""
+    if 'user' not in session or session['role'] != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    inventory_file = request.files.get('inventory_file')
+    if not inventory_file:
+        return jsonify({'error': 'Vui lòng chọn file tồn kho để tải lên.'}), 400
+
+    try:
+        rows, skipped_rows, warnings = parse_inventory_excel(inventory_file)
+        if not rows:
+            return jsonify({'error': 'Không đọc được mã hàng nào thuộc 18 mã kho quy định trong file này.'}), 400
+
+        upload_time = datetime.now()
+        db = get_db()
+        cursor = db.cursor()
+
+        # Ghi đè toàn bộ: xoá sạch dữ liệu tồn kho cũ rồi nạp lại từ đầu.
+        cursor.execute('TRUNCATE TABLE inventory_items')
+        execute_values(
+            cursor,
+            '''INSERT INTO inventory_items (part_code, part_name, unit, store_code, quantity)
+               VALUES %s''',
+            [(r['part_code'], r['part_name'], r['unit'], r['store_code'], r['quantity']) for r in rows]
+        )
+
+        distinct_parts = len({r['part_code'] for r in rows})
+
+        cursor.execute('''
+            INSERT INTO inventory_meta (id, filename, uploaded_by, upload_time, total_parts, skipped_rows)
+            VALUES (1, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                filename = EXCLUDED.filename,
+                uploaded_by = EXCLUDED.uploaded_by,
+                upload_time = EXCLUDED.upload_time,
+                total_parts = EXCLUDED.total_parts,
+                skipped_rows = EXCLUDED.skipped_rows
+        ''', (inventory_file.filename, session['user'], upload_time, distinct_parts, skipped_rows))
+
+        db.commit()
+        cursor.close()
+
+        return jsonify({
+            'success': True,
+            'total_parts': distinct_parts,
+            'skipped_rows': skipped_rows,
+            'warnings': warnings,
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/inventory', methods=['GET'])
+def get_inventory():
+    """Trả về tồn kho hệ thống dạng pivot (1 dòng/mã hàng, 6 cột theo cửa
+    hàng). Mọi user (admin lẫn store) đều xem được TOÀN BỘ hệ thống - đây
+    là ngoại lệ có chủ đích so với dữ liệu PO (vốn giới hạn theo cửa hàng)."""
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('SELECT part_code, part_name, unit, store_code, quantity FROM inventory_items')
+    items = cursor.fetchall()
+
+    pivot = {}
+    for it in items:
+        p = pivot.setdefault(it['part_code'], {
+            'part_code': it['part_code'],
+            'part_name': it['part_name'],
+            'unit': it['unit'],
+            'NS1': 0, 'NS2': 0, 'NS3': 0, 'NS4': 0, 'NS5': 0, 'NSM1': 0,
+        })
+        qty = float(it['quantity']) if it['quantity'] is not None else 0
+        p[it['store_code']] = qty
+
+    data = sorted(pivot.values(), key=lambda x: x['part_code'])
+
+    cursor.execute('SELECT filename, uploaded_by, upload_time, total_parts, skipped_rows FROM inventory_meta WHERE id = 1')
+    meta_row = cursor.fetchone()
+    meta = dict(meta_row) if meta_row else None
+    if meta and meta.get('upload_time'):
+        meta['upload_time'] = meta['upload_time'].strftime('%d/%m/%Y %H:%M')
+
+    cursor.close()
+
+    return jsonify({'success': True, 'data': data, 'meta': meta})
+
+
+@app.route('/api/version', methods=['GET'])
+def get_version():
+    """Trả về "chữ ký phiên bản" hiện tại của từng mảng dữ liệu (Dashboard,
+    Lịch sử, Tồn kho, Danh sách user). Được frontend gọi định kỳ (poll) với
+    tần suất thấp (nhẹ, chỉ vài giá trị) để phát hiện có thay đổi hay không,
+    từ đó tự động tải lại đúng phần dữ liệu đã đổi mà KHÔNG cần F5 lại trang
+    và không cần tải lại những phần chưa đổi."""
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    db = get_db()
+    cursor = db.cursor()
+
+    # Dashboard/Kết quả đối soát: đổi khi có upload mới (Danh sách PO, Chi
+    # tiết nhận hàng, hoặc Chi tiết PO) ở bất kỳ cửa hàng nào.
+    cursor.execute('''
+        SELECT GREATEST(
+            COALESCE((SELECT MAX(ds_po_upload_time) FROM latest_uploads), 'epoch'::timestamp),
+            COALESCE((SELECT MAX(receipt_upload_time) FROM latest_uploads), 'epoch'::timestamp),
+            COALESCE((SELECT MAX(upload_time) FROM po_detail_items), 'epoch'::timestamp)
+        ) AS v
+    ''')
+    data_version = cursor.fetchone()['v']
+
+    cursor.execute('SELECT MAX(id) AS v FROM upload_log')
+    history_version = cursor.fetchone()['v']
+
+    cursor.execute('SELECT upload_time AS v FROM inventory_meta WHERE id = 1')
+    inv_row = cursor.fetchone()
+    inventory_version = inv_row['v'] if inv_row else None
+
+    # Danh sách user: đổi khi thêm/xoá user hoặc đổi mật khẩu (dùng hash gộp
+    # cả bảng thay vì thêm cột "updated_at" mới để tránh phải sửa schema cũ).
+    cursor.execute('''
+        SELECT MD5(COALESCE(string_agg(username || ':' || role || ':' || store_code || ':' || password, ',' ORDER BY username), '')) AS v
+        FROM users
+    ''')
+    users_version = cursor.fetchone()['v']
+
+    cursor.close()
+
+    return jsonify({
+        'success': True,
+        'data_version': str(data_version) if data_version else None,
+        'history_version': history_version,
+        'inventory_version': str(inventory_version) if inventory_version else None,
+        'users_version': users_version,
+    })
 
 
 @app.route('/api/data', methods=['GET'])

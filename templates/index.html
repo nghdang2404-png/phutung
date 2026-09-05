@@ -69,6 +69,7 @@
 
     .drop-zone { border: 2px dashed #cbd5e1; border-radius: 12px; padding: 1.5rem 1rem; text-align: center; background: #f8fafc; cursor: pointer; position: relative; transition: all 0.2s; }
     .drop-zone:hover { border-color: #0d6efd; background: #eff6ff; }
+    .drop-zone-compact { padding: 0.6rem 0.9rem; text-align: left; border-radius: 10px; }
     
     .badge-status { padding: 5px 10px; font-weight: 600; border-radius: 20px; font-size: 0.78rem; white-space: nowrap; }
     .badge-debt { background-color: #ffebe9; color: #cf222e; border: 1px solid rgba(207,34,46,0.2); }
@@ -89,7 +90,7 @@
         font-weight: 800 !important; 
         text-align: center !important; 
     }
-    .part-code { font-family: monospace; background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-weight: 600; color: #334155; font-size: 0.85rem; }
+    .part-code { font-weight: 700; color: #1e3a8a; background: #eef2ff; border: 1px solid #e0e7ff; padding: 3px 10px; border-radius: 6px; font-size: 0.9rem; white-space: nowrap; }
     
     #loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); backdrop-filter: blur(4px); z-index: 9999; align-items: center; justify-content: center; flex-direction: column; }
 
@@ -150,6 +151,11 @@
             </button>
         </li>
         {% endif %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="inventory-tab" data-bs-toggle="pill" data-bs-target="#inventory-pane" onclick="loadInventory()">
+                <i class="bi bi-boxes me-2"></i>Tồn Kho Hệ Thống
+            </button>
+        </li>
         <li class="nav-item" role="presentation">
             <button class="nav-link" id="history-tab" data-bs-toggle="pill" data-bs-target="#history-pane" onclick="loadHistory()">
                 <i class="bi bi-clock-history me-2"></i>Lịch Sử Tải Lên
@@ -360,6 +366,63 @@
         </div>
         {% endif %}
 
+        <!-- INVENTORY PANE (Tồn Kho Hệ Thống) -->
+        <div class="tab-pane fade" id="inventory-pane">
+            {% if role == 'admin' %}
+            <div class="card card-custom p-3 mb-3 mb-md-4">
+                <form id="inventory-upload-form" class="d-flex flex-column flex-md-row align-items-stretch align-items-md-center gap-2">
+                    <div class="drop-zone drop-zone-compact d-flex align-items-center gap-2 flex-grow-1" onclick="document.getElementById('inventory_file').click()">
+                        <i class="bi bi-cloud-arrow-up text-primary fs-5 flex-shrink-0"></i>
+                        <div class="flex-grow-1 overflow-hidden">
+                            <div class="small fw-semibold mb-0 text-truncate">Chọn hoặc kéo thả file "Tổng hợp tồn kho" (.xlsx)</div>
+                            <div class="file-name text-primary fw-semibold text-truncate" style="font-size: 0.78rem;" id="inventory-file-name"></div>
+                        </div>
+                        <input type="file" id="inventory_file" accept=".xlsx, .xls" style="display: none;">
+                    </div>
+                    <button type="submit" class="btn btn-primary fw-semibold px-4 flex-shrink-0">
+                        <i class="bi bi-arrow-repeat me-2"></i>Cập Nhật Tồn Kho
+                    </button>
+                </form>
+                <p class="text-muted small mt-2 mb-0"><i class="bi bi-exclamation-circle me-1"></i>Dữ liệu tồn kho sẽ được <strong>thay thế hoàn toàn</strong> (không cộng dồn). Chỉ lấy 18 mã kho KPT/KPK/KPTN của NS1-NS5-NSM1, các mã kho khác tự động bị bỏ qua.</p>
+            </div>
+            {% endif %}
+
+            <div class="card card-custom p-3 p-md-4">
+                <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-2 mb-3">
+                    <h5 class="fw-bold mb-0 fs-6 fs-md-5"><i class="bi bi-boxes me-2 text-primary"></i>Tồn Kho Hệ Thống (Tất Cả Cửa Hàng)</h5>
+                    <span class="text-muted small" id="inventory-meta">Đang tải...</span>
+                </div>
+                <div class="row g-2 align-items-center mb-3">
+                    <div class="col-12 col-md-6">
+                        <input type="text" id="inventory-search" class="form-control" placeholder="Tìm theo mã hàng hoặc tên hàng..." oninput="filterInventory()">
+                    </div>
+                    <div class="col-12 col-md-6 text-md-end">
+                        <span class="text-muted small">Số mã hàng hiển thị: <strong id="inventory-visible-count">0</strong></span>
+                    </div>
+                </div>
+                <div class="table-responsive border rounded-3">
+                    <table class="table table-hover align-middle mb-0 text-nowrap">
+                        <thead>
+                            <tr>
+                                <th>Mã Hàng</th>
+                                <th>Tên Hàng</th>
+                                <th>ĐVT</th>
+                                <th class="text-end">NS1</th>
+                                <th class="text-end">NS2</th>
+                                <th class="text-end">NS3</th>
+                                <th class="text-end">NS4</th>
+                                <th class="text-end">NS5</th>
+                                <th class="text-end">NSM1</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventory-body">
+                            <tr><td colspan="9" class="text-center py-4 text-muted">Đang tải dữ liệu...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- HISTORY PANE -->
         <div class="tab-pane fade" id="history-pane">
             <div class="card card-custom p-3 p-md-4">
@@ -484,6 +547,7 @@
     document.addEventListener("DOMContentLoaded", () => {
         loadData();
         setupDragZones();
+        startVersionPolling();
     });
 
     async function loadData() {
@@ -494,7 +558,7 @@
             if(result.success) {
                 globalData = result.data;
                 updateSummary(result.summary);
-                renderTable(globalData);
+                filterData(); // áp lại bộ lọc/tìm kiếm hiện tại (nếu có) thay vì hiện toàn bộ, để không làm mất trạng thái đang xem của user khi tự động làm mới nền
                 renderCharts(result.summary);
             }
         } catch(e) { console.error(e); }
@@ -637,6 +701,92 @@
                     new bootstrap.Tab(document.getElementById('report-tab')).show();
                 } else { alert('Lỗi: ' + result.error); }
             } catch(e) { alert('Lỗi kết nối server.'); }
+            finally { document.getElementById('loading-overlay').style.display = 'none'; }
+        });
+    }
+
+    let globalInventory = [];
+
+    async function loadInventory() {
+        try {
+            const res = await fetch('/api/inventory');
+            const result = await res.json();
+            if (result.success) {
+                globalInventory = result.data;
+                filterInventory(); // áp lại từ khoá tìm kiếm hiện tại (nếu có)
+                const metaEl = document.getElementById('inventory-meta');
+                if (result.meta && result.meta.upload_time) {
+                    metaEl.innerText = `Cập nhật lần cuối: ${result.meta.upload_time} bởi ${result.meta.uploaded_by} · ${result.meta.total_parts.toLocaleString()} mã hàng`;
+                } else {
+                    metaEl.innerText = 'Chưa có dữ liệu tồn kho.';
+                }
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    function renderInventoryTable(data) {
+        const tbody = document.getElementById('inventory-body');
+        document.getElementById('inventory-visible-count').innerText = data.length.toLocaleString();
+
+        if (data.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">Không có dữ liệu tồn kho.</td></tr>`;
+            return;
+        }
+
+        const fmt = (v) => (v && v !== 0) ? v.toLocaleString() : '-';
+
+        tbody.innerHTML = data.map(item => `
+            <tr>
+                <td><span class="part-code">${item.part_code}</span></td>
+                <td>${item.part_name || ''}</td>
+                <td class="text-muted small">${item.unit || ''}</td>
+                <td class="text-end">${fmt(item.NS1)}</td>
+                <td class="text-end">${fmt(item.NS2)}</td>
+                <td class="text-end">${fmt(item.NS3)}</td>
+                <td class="text-end">${fmt(item.NS4)}</td>
+                <td class="text-end">${fmt(item.NS5)}</td>
+                <td class="text-end">${fmt(item.NSM1)}</td>
+            </tr>
+        `).join('');
+    }
+
+    function filterInventory() {
+        const search = document.getElementById('inventory-search').value.toLowerCase();
+        const filtered = globalInventory.filter(item =>
+            item.part_code.toLowerCase().includes(search) ||
+            (item.part_name || '').toLowerCase().includes(search)
+        );
+        renderInventoryTable(filtered);
+    }
+
+    const inventoryUploadForm = document.getElementById('inventory-upload-form');
+    if (inventoryUploadForm) {
+        inventoryUploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const file = document.getElementById('inventory_file').files[0];
+            if (!file) {
+                alert('Vui lòng chọn file tồn kho để tải lên.');
+                return;
+            }
+            const formData = new FormData();
+            formData.append('inventory_file', file);
+
+            document.getElementById('loading-overlay').style.display = 'flex';
+            try {
+                const res = await fetch('/api/admin/upload-inventory', { method: 'POST', body: formData });
+                const result = await res.json();
+                if (res.ok) {
+                    let msg = `Đã cập nhật tồn kho: ${result.total_parts.toLocaleString()} mã hàng (bỏ qua ${result.skipped_rows.toLocaleString()} dòng không thuộc mã kho quy định).`;
+                    if (result.warnings && result.warnings.length) {
+                        msg += '\n\nCảnh báo:\n' + result.warnings.slice(0, 10).join('\n');
+                    }
+                    alert(msg);
+                    document.getElementById('inventory-file-name').innerText = '';
+                    loadInventory();
+                } else {
+                    alert('Lỗi: ' + result.error);
+                }
+            } catch (e) { alert('Lỗi kết nối server.'); }
             finally { document.getElementById('loading-overlay').style.display = 'none'; }
         });
     }
@@ -784,14 +934,16 @@
         const fileInputs = [
             { id: 'ds_po_file', nameId: 'ds-po-file-name' },
             { id: 'po_detail_file', nameId: 'po-detail-file-name' },
-            { id: 'receipt_file', nameId: 'receipt-file-name' }
+            { id: 'receipt_file', nameId: 'receipt-file-name' },
+            { id: 'inventory_file', nameId: 'inventory-file-name' }
         ];
 
         fileInputs.forEach(item => {
             const input = document.getElementById(item.id);
             const nameDisplay = document.getElementById(item.nameId);
+            if(!input || !nameDisplay) return;
             const dropZone = input.closest('.drop-zone');
-            if(!input || !nameDisplay || !dropZone) return;
+            if(!dropZone) return;
 
             input.addEventListener('change', () => {
                 if(input.files.length > 0) {
@@ -831,6 +983,52 @@
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, "DoiSoat");
         XLSX.writeFile(wb, `Bao_Cao_PO_NamSuong_${new Date().toISOString().slice(0,10)}.xlsx`);
+    }
+
+    // ------------------------------------------------------------------
+    // TỰ ĐỘNG CẬP NHẬT (không cần F5 lại trang)
+    // ------------------------------------------------------------------
+    // Cơ chế: định kỳ (20 giây/lần) gọi /api/version - endpoint rất nhẹ,
+    // chỉ trả về vài "chữ ký" (timestamp/hash) của từng mảng dữ liệu. So
+    // sánh với lần gọi trước đó; mảng nào đổi mới tải lại đúng mảng đó
+    // (loadData / loadHistory / loadInventory / loadAdminUsers) - không tải
+    // lại toàn trang, không tải những phần chưa đổi, và không làm phiền
+    // user bằng thông báo hay reload cứng.
+    const isAdminUI = document.getElementById('admin-tab') !== null;
+    let lastVersions = null;
+    let versionPollTimer = null;
+
+    async function pollVersion() {
+        try {
+            const res = await fetch('/api/version');
+            if (!res.ok) return; // lỗi mạng tạm thời/hết phiên đăng nhập -> bỏ qua, thử lại ở lần poll sau
+            const v = await res.json();
+            if (!v.success) return;
+
+            if (lastVersions === null) {
+                // Lần poll đầu tiên: chỉ lưu mốc để so sánh, dữ liệu ban đầu
+                // đã được các hàm loadXxx() tải khi vào trang rồi.
+                lastVersions = v;
+                return;
+            }
+
+            if (v.data_version !== lastVersions.data_version) { loadData(); }
+            if (v.history_version !== lastVersions.history_version) { loadHistory(); }
+            if (v.inventory_version !== lastVersions.inventory_version) { loadInventory(); }
+            if (isAdminUI && v.users_version !== lastVersions.users_version) { loadAdminUsers(); }
+
+            lastVersions = v;
+        } catch (e) { /* im lặng bỏ qua, không làm phiền user vì đây là tác vụ nền */ }
+    }
+
+    function startVersionPolling() {
+        if (versionPollTimer) clearInterval(versionPollTimer);
+        versionPollTimer = setInterval(pollVersion, 20000); // 20 giây/lần
+        // Khi user quay lại tab trình duyệt sau khi rời đi 1 lúc, kiểm tra
+        // ngay thay vì đợi hết chu kỳ 20s tiếp theo.
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') pollVersion();
+        });
     }
 </script>
 </body>
