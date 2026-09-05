@@ -22,21 +22,21 @@
     :root { 
         --bs-body-bg: #f4f6f9; 
         --bs-body-font-family: 'SVN-MonaSans', sans-serif; 
-        --ns-red: #dc3545;
+        --ns-blue: #0d6efd;
         --ns-dark: #1e293b;
     }
     body { background-color: var(--bs-body-bg); color: var(--ns-dark); font-family: var(--bs-body-font-family); }
     
-    /* Brand Header Banner - Responsive cho điện thoại */
+    /* Brand Header Banner */
     .brand-banner {
         background: #ffffff;
         color: var(--ns-dark);
-        border-radius: 12px;
+        border-radius: 16px;
         padding: 1.25rem 2rem;
         margin-bottom: 1.5rem;
-        border: 1px solid #e2e8f0;
-        border-left: 5px solid var(--ns-red);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+        border: 1px solid rgba(13,110,253,0.08);
+        border-top: 5px solid var(--ns-blue);
+        box-shadow: 0 10px 30px rgba(13,110,253,0.05);
     }
     .header-logo {
         height: 38px;
@@ -47,20 +47,28 @@
         border: 1px solid #e2e8f0;
     }
 
-    .card-custom { border: none; border-radius: 12px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04); background: #ffffff; }
-    .stat-card.stat-total { border-left: 5px solid #6c757d; }
-    .stat-card.stat-debt { border-left: 5px solid #dc3545; }
-    .stat-card.stat-shipping { border-left: 5px solid #fd7e14; }
-    .stat-card.stat-received { border-left: 5px solid #198754; }
+    /* Đồng bộ kiểu thẻ card giống trang đăng nhập (có viền xanh trên cùng) */
+    .card-custom { 
+        border: none; 
+        border-radius: 16px; 
+        box-shadow: 0 10px 30px rgba(13,110,253,0.05); 
+        background: #ffffff; 
+        border-top: 4px solid var(--ns-blue);
+    }
+
+    .stat-card.stat-total { border-top-color: #6c757d; }
+    .stat-card.stat-debt { border-top-color: #dc3545; }
+    .stat-card.stat-shipping { border-top-color: #fd7e14; }
+    .stat-card.stat-received { border-top-color: #198754; }
     
     .stat-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.3rem; }
     
-    .nav-pills .nav-link { border-radius: 8px; font-weight: 600; padding: 10px 16px; color: #64748b; background: #ffffff; box-shadow: 0 1px 3px rgba(0,0,0,0.02); transition: all 0.2s; white-space: nowrap; }
-    .nav-pills .nav-link.active { background-color: #dc3545 !important; color: white !important; box-shadow: 0 4px 12px rgba(220, 53, 69, 0.3); }
-    .nav-pills .nav-link:hover:not(.active) { color: #dc3545; background: #fff5f5; }
+    .nav-pills .nav-link { border-radius: 8px; font-weight: 600; padding: 10px 16px; color: #64748b; background: #ffffff; box-shadow: 0 2px 6px rgba(0,0,0,0.02); transition: all 0.2s; white-space: nowrap; }
+    .nav-pills .nav-link.active { background-color: #0d6efd !important; color: white !important; box-shadow: 0 4px 12px rgba(13, 110, 253, 0.3); }
+    .nav-pills .nav-link:hover:not(.active) { color: #0d6efd; background: #eff6ff; }
 
     .drop-zone { border: 2px dashed #cbd5e1; border-radius: 12px; padding: 1.5rem 1rem; text-align: center; background: #f8fafc; cursor: pointer; position: relative; transition: all 0.2s; }
-    .drop-zone:hover { border-color: #dc3545; background: #fff5f5; }
+    .drop-zone:hover { border-color: #0d6efd; background: #eff6ff; }
     
     .badge-status { padding: 5px 10px; font-weight: 600; border-radius: 20px; font-size: 0.78rem; white-space: nowrap; }
     .badge-debt { background-color: #ffebe9; color: #cf222e; border: 1px solid rgba(207,34,46,0.2); }
@@ -69,12 +77,22 @@
     .badge-order-type { padding: 4px 9px; font-weight: 600; border-radius: 14px; font-size: 0.74rem; white-space: nowrap; background-color: #eef2ff; color: #4338ca; border: 1px solid rgba(67,56,202,0.18); }
     
     .table-responsive { max-height: 550px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-    .table thead th { position: sticky; top: 0; background-color: #f8fafc; z-index: 10; font-size: 0.75rem; text-transform: uppercase; color: #64748b; white-space: nowrap; }
+    .table thead th { 
+        position: sticky; 
+        top: 0; 
+        background-color: #e7f1ff; 
+        z-index: 10; 
+        font-size: 0.75rem; 
+        text-transform: uppercase; 
+        color: #0d6efd; 
+        white-space: nowrap; 
+        font-weight: 800 !important; 
+        text-align: center !important; 
+    }
     .part-code { font-family: monospace; background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-weight: 600; color: #334155; font-size: 0.85rem; }
     
     #loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); backdrop-filter: blur(4px); z-index: 9999; align-items: center; justify-content: center; flex-direction: column; }
 
-    /* Media Queries tối ưu riêng cho mobile */
     @media (max-width: 768px) {
         .brand-banner { padding: 1rem; }
         .brand-banner h4 { font-size: 1.1rem; }
@@ -85,23 +103,23 @@
 </style>
 </head>
 <link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#dc3545">
+<meta name="theme-color" content="#0d6efd">
 <body>
 
 <div id="loading-overlay">
-    <div class="spinner-border text-danger mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+    <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
     <h5 class="fw-bold text-dark text-center px-3">Đang xử lý và đối soát dữ liệu Nam Sương...</h5>
 </div>
 
 <div class="container-fluid px-2 px-md-4 py-3 py-md-4" style="max-width: 1400px;">
     
-    <!-- Nam Sương Branded Header Banner -->
+    <!-- Brand Header Banner -->
     <div class="brand-banner d-flex align-items-center justify-content-between flex-wrap gap-3">
         <div class="d-flex align-items-center gap-2 gap-md-3">
             <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo Nam Sương" class="header-logo shadow-sm">
             <div>
                 <div class="d-flex align-items-center gap-2 mb-1">
-                    <span class="badge bg-danger bg-opacity-10 text-danger fw-bold px-2 py-1" style="font-size: 0.7rem;">NAM SƯƠNG MOTOR</span>
+                    <span class="badge bg-primary bg-opacity-10 text-primary fw-bold px-2 py-1" style="font-size: 0.7rem;">NAM SƯƠNG MOTOR</span>
                     <span class="text-muted small d-none d-sm-inline">| Hệ thống nội bộ</span>
                 </div>
                 <h4 class="fw-bold mb-0 text-dark fs-6 fs-md-4">
@@ -111,14 +129,14 @@
         </div>
         <div class="d-flex align-items-center gap-2 ms-auto ms-md-0">
             <span class="badge bg-light text-dark shadow-sm px-2 px-md-3 py-2 border rounded-pill text-truncate" style="max-width: 200px;">
-                <i class="bi bi-person-circle text-danger me-1"></i> <strong class="d-none d-sm-inline">User: </strong>{{ user }} 
-                <span class="badge bg-danger ms-1">{{ store_code }}</span>
+                <i class="bi bi-person-circle text-primary me-1"></i> <strong class="d-none d-sm-inline">User: </strong>{{ user }} 
+                <span class="badge bg-primary ms-1">{{ store_code }}</span>
             </span>
-            <a href="/logout" class="btn btn-outline-danger btn-sm fw-semibold shadow-sm text-nowrap"><i class="bi bi-box-arrow-right me-1"></i><span class="d-none d-sm-inline">Thoát</span></a>
+            <a href="/logout" class="btn btn-outline-primary btn-sm fw-semibold shadow-sm text-nowrap"><i class="bi bi-box-arrow-right me-1"></i><span class="d-none d-sm-inline">Thoát</span></a>
         </div>
     </div>
 
-    <!-- Navigation Tabs (Hỗ trợ vuốt ngang trên điện thoại) -->
+    <!-- Navigation Tabs -->
     <ul class="nav nav-pills mb-3 mb-md-4 gap-2 flex-nowrap overflow-auto" id="mainTab" role="tablist">
         <li class="nav-item" role="presentation">
             <button class="nav-link active" id="report-tab" data-bs-toggle="pill" data-bs-target="#report-pane" onclick="loadData()">
@@ -156,7 +174,7 @@
                 <div class="row align-items-center">
                     <div class="col-12 col-md-4">
                         <label class="form-label fw-semibold small mb-1 text-secondary">Chọn Cửa Hàng Xem Báo Cáo:</label>
-                        <select id="admin-store-filter" class="form-select border-danger-subtle" onchange="loadData()">
+                        <select id="admin-store-filter" class="form-select border-primary-subtle" onchange="loadData()">
                             <option value="ALL">🌐 Tất Cả Cửa Hàng Nam Sương (Gộp)</option>
                             <option value="NS1">Cửa hàng NS1</option>
                             <option value="NS2">Cửa hàng NS2</option>
@@ -170,15 +188,15 @@
             </div>
             {% endif %}
 
-            <div class="alert alert-danger py-2 px-3 mb-3 mb-md-4 d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between shadow-sm border-0 bg-white gap-2" style="border-left: 5px solid #dc3545 !important; border-radius: 10px;">
+            <div class="alert alert-primary py-2 px-3 mb-3 mb-md-4 d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between shadow-sm border-0 bg-white gap-2" style="border-left: 5px solid #0d6efd !important; border-radius: 10px;">
                 <div class="d-flex align-items-center">
-                    <i class="bi bi-calendar-range text-danger fs-4 me-3 flex-shrink-0"></i>
+                    <i class="bi bi-calendar-range text-primary fs-4 me-3 flex-shrink-0"></i>
                     <div>
                         <span class="text-muted small d-block" style="font-size: 0.75rem;">Phạm vi thời gian đơn đặt hàng (PO):</span>
                         <strong class="text-dark small">Từ <span id="report-min-date">--/--/----</span> đến <span id="report-max-date">--/--/----</span></strong>
                     </div>
                 </div>
-                <span class="badge bg-danger bg-opacity-10 text-danger px-2 py-1 rounded-pill small align-self-end align-self-md-center">Tự động quét</span>
+                <span class="badge bg-primary bg-opacity-10 text-primary px-2 py-1 rounded-pill small align-self-end align-self-md-center">Tự động quét</span>
             </div>
 
             <!-- Stat Cards -->
@@ -233,13 +251,13 @@
             <div class="row g-3 g-md-4 mb-3 mb-md-4">
                 <div class="col-lg-8">
                     <div class="card card-custom p-3 p-md-4 h-100">
-                        <h6 class="fw-bold mb-3 small fs-md-6"><i class="bi bi-bar-chart-line text-danger me-2"></i>Biểu Đồ Phân Phối Trạng Thái Phụ Tùng</h6>
+                        <h6 class="fw-bold mb-3 small fs-md-6"><i class="bi bi-bar-chart-line text-primary me-2"></i>Biểu Đồ Phân Phối Trạng Thái Phụ Tùng</h6>
                         <div style="height: 240px;"><canvas id="statusChart"></canvas></div>
                     </div>
                 </div>
                 <div class="col-lg-4">
                     <div class="card card-custom p-3 p-md-4 h-100">
-                        <h6 class="fw-bold mb-3 small fs-md-6"><i class="bi bi-pie-chart-fill text-danger me-2"></i>Tỷ Lệ Tình Trạng</h6>
+                        <h6 class="fw-bold mb-3 small fs-md-6"><i class="bi bi-pie-chart-fill text-primary me-2"></i>Tỷ Lệ Tình Trạng</h6>
                         <div style="height: 240px;"><canvas id="pieChart"></canvas></div>
                     </div>
                 </div>
@@ -297,11 +315,11 @@
                 <div class="row g-3 g-md-4">
                     <div class="col-lg-4">
                         <div class="card card-custom h-100 p-3 p-md-4">
-                            <h6 class="fw-bold mb-3 small"><i class="bi bi-file-earmark-spreadsheet text-danger me-2"></i>1. File Danh Sách PO</h6>
+                            <h6 class="fw-bold mb-3 small"><i class="bi bi-file-earmark-spreadsheet text-primary me-2"></i>1. File Danh Sách PO</h6>
                             <div class="drop-zone" onclick="document.getElementById('ds_po_file').click()">
-                                <i class="bi bi-cloud-arrow-up display-6 text-danger mb-2"></i>
+                                <i class="bi bi-cloud-arrow-up display-6 text-primary mb-2"></i>
                                 <p class="text-muted small mb-0">Kéo thả file hoặc nhấp chọn</p>
-                                <div class="file-name text-danger fw-semibold mt-2 small text-truncate" id="ds-po-file-name"></div>
+                                <div class="file-name text-primary fw-semibold mt-2 small text-truncate" id="ds-po-file-name"></div>
                                 <input type="file" id="ds_po_file" accept=".xlsx, .xls, .csv" style="display: none;">
                             </div>
                             <p class="text-muted small mt-2 mb-0"><i class="bi bi-info-circle me-1"></i>Không bắt buộc mỗi lần tải lên. Nếu chọn file, dữ liệu cũ sẽ được <strong>thay thế</strong> hoàn toàn bằng file mới.</p>
@@ -334,7 +352,7 @@
                 </div>
                 <p class="text-muted small mt-3 mb-0"><i class="bi bi-exclamation-circle me-1"></i>Chỉ cần chọn <strong>ít nhất 1 trong 3 file</strong> ở trên là có thể bấm nút đối soát.</p>
                 <div class="mt-4 text-center text-md-end">
-                    <button type="submit" class="btn btn-danger btn-lg px-4 px-md-5 shadow-sm fw-semibold w-100 w-md-auto" style="background-color: #dc3545;">
+                    <button type="submit" class="btn btn-primary btn-lg px-4 px-md-5 shadow-sm fw-semibold w-100 w-md-auto" style="background-color: #0d6efd;">
                         <i class="bi bi-cpu me-2"></i> Tải Lên & Đối Soát Ngay
                     </button>
                 </div>
@@ -345,7 +363,7 @@
         <!-- HISTORY PANE -->
         <div class="tab-pane fade" id="history-pane">
             <div class="card card-custom p-3 p-md-4">
-                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-clock-history me-2 text-danger"></i>Lịch Sử Tải Lên Dữ Liệu</h5>
+                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-clock-history me-2 text-primary"></i>Lịch Sử Tải Lên Dữ Liệu</h5>
                 <div class="table-responsive border rounded-3">
                     <table class="table table-hover align-middle mb-0 text-nowrap">
                         <thead>
@@ -370,7 +388,7 @@
         <!-- ADMIN PANE -->
         <div class="tab-pane fade" id="admin-pane">
             <div class="card card-custom p-3 p-md-4">
-                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-people-fill me-2 text-danger"></i>Quản Lý Tài Khoản & Mật Khẩu User</h5>
+                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-people-fill me-2 text-primary"></i>Quản Lý Tài Khoản & Mật Khẩu User</h5>
                 <div class="table-responsive border rounded-3">
                     <table class="table table-hover align-middle mb-0">
                         <thead>
@@ -388,13 +406,13 @@
                 </div>
             </div>
 
-            <div class="card card-custom p-3 p-md-4 mt-3 mt-md-4 border border-danger-subtle">
+            <div class="card card-custom p-3 p-md-4 mt-3 mt-md-4 border border-primary-subtle" style="border-top-color: #dc3545 !important;">
                 <h5 class="fw-bold mb-1 fs-6 fs-md-5 text-danger"><i class="bi bi-trash3-fill me-2"></i>Xoá Dữ Liệu Theo Chi Nhánh</h5>
                 <p class="text-muted small mb-3">Thao tác này sẽ <strong>xoá vĩnh viễn</strong> toàn bộ dữ liệu Danh sách PO, Chi tiết PO, Chi tiết nhận hàng và lịch sử tải lên của chi nhánh được chọn. Tài khoản đăng nhập của chi nhánh <strong>không</strong> bị ảnh hưởng. Hành động này <strong>không thể hoàn tác</strong>.</p>
                 <div class="row g-2 align-items-end">
                     <div class="col-12 col-sm-6 col-md-4">
                         <label class="form-label fw-semibold small mb-1">Chọn chi nhánh cần xoá dữ liệu:</label>
-                        <select id="delete-store-select" class="form-select border-danger-subtle">
+                        <select id="delete-store-select" class="form-select border-primary-subtle">
                             <option value="">-- Chọn chi nhánh --</option>
                             <option value="NS1">Cửa hàng NS1</option>
                             <option value="NS2">Cửa hàng NS2</option>
@@ -421,7 +439,7 @@
 <div class="modal fade" id="changePassModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow">
-            <div class="modal-header bg-danger text-white">
+            <div class="modal-header bg-primary text-white">
                 <h5 class="modal-title fw-bold fs-6">Đổi Mật Khẩu: <span id="modal-username"></span></h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
@@ -431,7 +449,7 @@
                     <label class="form-label fw-semibold small">Mật khẩu mới</label>
                     <input type="password" id="new-password-input" class="form-control" placeholder="Nhập mật khẩu mới...">
                 </div>
-                <button type="button" class="btn btn-danger w-100 fw-semibold" onclick="submitNewPassword()">Xác Nhận Đổi Mật Khẩu</button>
+                <button type="button" class="btn btn-primary w-100 fw-semibold" onclick="submitNewPassword()">Xác Nhận Đổi Mật Khẩu</button>
             </div>
         </div>
     </div>
@@ -589,9 +607,6 @@
             const poDetailFile = document.getElementById('po_detail_file').files[0];
             const receiptFile = document.getElementById('receipt_file').files[0];
 
-            // Chỉ cần chọn ít nhất 1 trong 3 file là được phép đối soát -
-            // ví dụ chỉ chọn file "Chi tiết PO" (dữ liệu cộng dồn, không xoá
-            // dữ liệu cũ) vẫn bấm được nút mà không cần 2 file kia.
             if (!dsPoFile && !poDetailFile && !receiptFile) {
                 alert('Vui lòng chọn ít nhất 1 file để tải lên.');
                 return;
@@ -636,7 +651,7 @@
                     <td class="text-center text-muted small">${h.id}</td>
                     <td><span class="badge bg-secondary">${h.store_code}</span></td>
                     <td class="fw-semibold">${h.upload_time}</td>
-                    <td class="small text-danger">${h.ds_po_filename || '—'}</td>
+                    <td class="small text-primary">${h.ds_po_filename || '—'}</td>
                     <td class="small text-warning">${h.po_detail_filename || '—'}</td>
                     <td class="small text-success">${h.receipt_filename || '—'}</td>
                 </tr>
@@ -657,7 +672,7 @@
                     <td><span class="badge ${u.role === 'admin' ? 'bg-danger' : 'bg-primary'}">${u.role}</span></td>
                     <td>${u.store_code}</td>
                     <td class="text-end">
-                        <button class="btn btn-outline-danger btn-sm" onclick="openPassModal('${u.username}')">
+                        <button class="btn btn-outline-primary btn-sm" onclick="openPassModal('${u.username}')">
                             <i class="bi bi-key me-1"></i> <span class="d-none d-sm-inline">Đổi Mật Khẩu</span>
                         </button>
                     </td>
@@ -674,43 +689,42 @@
     }
 
     async function submitNewPassword() {
-    const username = document.getElementById('target-username').value;
-    const passwordInput = document.getElementById('new-password-input');
-    
-    if (!passwordInput) {
-        alert('Không tìm thấy ô nhập mật khẩu!');
-        return;
-    }
-
-    const password = passwordInput.value;
-    if (!password) { 
-        alert('Vui lòng nhập mật khẩu mới!'); 
-        return; 
-    }
-
-    try {
-        const res = await fetch('/api/admin/users', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ username, password })
-        });
-        const result = await res.json();
+        const username = document.getElementById('target-username').value;
+        const passwordInput = document.getElementById('new-password-input');
         
-        if (res.ok && (result.ok || result.success)) {
-            alert('Đổi mật khẩu thành công!');
-            const modalEl = document.getElementById('changePassModal');
-            const modal = bootstrap.Modal.getInstance(modalEl);
-            if (modal) modal.hide();
-            // Xóa giá trị sau khi đổi thành công
-            passwordInput.value = '';
-        } else { 
-            alert('Lỗi: ' + (result.error || 'Không thể đổi mật khẩu')); 
+        if (!passwordInput) {
+            alert('Không tìm thấy ô nhập mật khẩu!');
+            return;
         }
-    } catch (e) {
-        console.error(e);
-        alert('Lỗi kết nối đến server.');
+
+        const password = passwordInput.value;
+        if (!password) { 
+            alert('Vui lòng nhập mật khẩu mới!'); 
+            return; 
+        }
+
+        try {
+            const res = await fetch('/api/admin/users', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ username, password })
+            });
+            const result = await res.json();
+            
+            if (res.ok && (result.ok || result.success)) {
+                alert('Đổi mật khẩu thành công!');
+                const modalEl = document.getElementById('changePassModal');
+                const modal = bootstrap.Modal.getInstance(modalEl);
+                if (modal) modal.hide();
+                passwordInput.value = '';
+            } else { 
+                alert('Lỗi: ' + (result.error || 'Không thể đổi mật khẩu')); 
+            }
+        } catch (e) {
+            console.error(e);
+            alert('Lỗi kết nối đến server.');
+        }
     }
-}
 
     let pendingDeleteStore = '';
 
@@ -788,14 +802,14 @@
             ['dragenter', 'dragover'].forEach(eventName => {
                 dropZone.addEventListener(eventName, (e) => {
                     e.preventDefault();
-                    dropZone.classList.add('border-danger', 'bg-light');
+                    dropZone.classList.add('border-primary', 'bg-light');
                 });
             });
 
             ['dragleave', 'drop'].forEach(eventName => {
                 dropZone.addEventListener(eventName, (e) => {
                     e.preventDefault();
-                    dropZone.classList.remove('border-danger', 'bg-light');
+                    dropZone.classList.remove('border-primary', 'bg-light');
                 });
             });
 
