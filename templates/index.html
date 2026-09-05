@@ -66,6 +66,7 @@
     .badge-debt { background-color: #ffebe9; color: #cf222e; border: 1px solid rgba(207,34,46,0.2); }
     .badge-shipping { background-color: #fff8c5; color: #9a6700; border: 1px solid rgba(154,103,0,0.2); }
     .badge-received { background-color: #dafbe1; color: #1a7f37; border: 1px solid rgba(26,127,55,0.2); }
+    .badge-order-type { padding: 4px 9px; font-weight: 600; border-radius: 14px; font-size: 0.74rem; white-space: nowrap; background-color: #eef2ff; color: #4338ca; border: 1px solid rgba(67,56,202,0.18); }
     
     .table-responsive { max-height: 550px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
     .table thead th { position: sticky; top: 0; background-color: #f8fafc; z-index: 10; font-size: 0.75rem; text-transform: uppercase; color: #64748b; white-space: nowrap; }
@@ -273,15 +274,16 @@
                                 {% if role == 'admin' %}<th>Cửa Hàng</th>{% endif %}
                                 <th>Mã PO</th>
                                 <th>Ngày Đặt</th>
+                                <th>Loại Đơn Hàng</th>
                                 <th>Mã Phụ Tùng</th>
                                 <th class="text-center">Trạng Thái</th>
                                 <th class="text-end">Số Ngày</th>
-                                <th class="text-end">Số Lượng Nợ</th>
-                                <th class="text-end">Cộng Dồn Theo Phụ Tùng</th>
+                                <th class="text-end">Nợ theo đơn</th>
+                                <th class="text-end">Tổng nợ</th>
                             </tr>
                         </thead>
                         <tbody id="result-body">
-                            <tr><td colspan="9" class="text-center py-4 text-muted">Đang tải dữ liệu...</td></tr>
+                            <tr><td colspan="10" class="text-center py-4 text-muted">Đang tải dữ liệu...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -496,7 +498,7 @@
         const isAdmin = document.getElementById('admin-store-filter') !== null;
 
         if (data.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">Không có dữ liệu.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" class="text-center py-4 text-muted">Không có dữ liệu.</td></tr>`;
             return;
         }
 
@@ -509,6 +511,7 @@
 
             const qtyDebt = item.qty_debt || 0;
             const qtyDebtTotal = item.qty_debt_total || 0;
+            const orderType = item.order_type || 'Chưa có dữ liệu';
 
             return `
                 <tr>
@@ -516,6 +519,7 @@
                     ${isAdmin ? `<td><span class="badge bg-light text-dark border">${item.store_code || 'N/A'}</span></td>` : ''}
                     <td><strong>${item.po_code}</strong></td>
                     <td>${orderDateHtml}</td>
+                    <td><span class="badge-order-type">${orderType}</span></td>
                     <td><span class="part-code">${item.part_code}</span></td>
                     <td class="text-center"><span class="badge-status ${badgeClass}">${item.status}</span></td>
                     <td class="text-end fw-bold ${item.status === 'Nợ' ? 'text-danger' : (item.status === 'Đang vận chuyển' ? 'text-warning' : 'text-muted')}">

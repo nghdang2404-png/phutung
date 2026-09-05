@@ -210,6 +210,7 @@ _HEADER_KEYWORDS = [
     'ngày tạo đơn hàng mua', 'ngày tạo', 'ngày đặt',
     'ngày gửi đơn đặt hàng', 'trạng thái đơn hàng mua', 'trạng thái đơn hàng',
     'trạng thái po', 'mrn status', 'trạng thái', 'status', 'part',
+    'phân loại đơn hàng phụ tùng', 'phân loại đơn hàng', 'loại đơn hàng', 'order type',
 ]
 
 
@@ -324,6 +325,38 @@ def parse_qty(val):
         return 0
 
 
+# Ánh xạ mã "Phân loại đơn hàng" (cột trong file Danh sách PO) sang tên
+# hiển thị tiếng Việt. Nhận diện theo mã số đứng đầu (10/22/26...) để không
+# phụ thuộc chính xác vào phần chữ tiếng Anh phía sau.
+_ORDER_TYPE_MAP = [
+    ('10', 'Đơn khẩn'),
+    ('22', 'Đơn định kỳ'),
+    ('26', 'Đơn Bình, điện, lốp, Dầu nhớt'),
+]
+
+
+def map_order_type(raw_val):
+    if raw_val is None or pd.isna(raw_val):
+        return 'Chưa có dữ liệu'
+    val = str(raw_val).strip()
+    if not val or val.lower() == 'nan':
+        return 'Chưa có dữ liệu'
+
+    val_lower = val.lower()
+    for code, label in _ORDER_TYPE_MAP:
+        if val.startswith(code + '-') or val.startswith(code + ' ') or val == code:
+            return label
+    if 'urgent' in val_lower:
+        return 'Đơn khẩn'
+    if 'stock order' in val_lower:
+        return 'Đơn định kỳ'
+    if 'drop shipment' in val_lower:
+        return 'Đơn Bình, điện, lốp, Dầu nhớt'
+
+    # Không nhận diện được mã -> hiển thị nguyên giá trị gốc để không mất dữ liệu
+    return val
+
+
 def process_data(ds_po_df, po_detail_df, receipt_df):
     ds_po_df.columns = [str(c).strip() for c in ds_po_df.columns]
     po_detail_df.columns = [str(c).strip() for c in po_detail_df.columns]
@@ -332,6 +365,7 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
     ds_po_col = find_col(ds_po_df.columns, ['mã đơn hàng mua', 'mã đơn hàng', 'mã po', 'order number', 'po'])
     ds_date_col = find_col(ds_po_df.columns, ['ngày tạo đơn hàng mua', 'ngày tạo', 'ngày đặt', 'ngày gửi đơn đặt hàng', 'ngày'])
     ds_status_col = find_col(ds_po_df.columns, ['trạng thái đơn hàng mua', 'trạng thái đơn hàng', 'trạng thái po'])
+    ds_order_type_col = find_col(ds_po_df.columns, ['phân loại đơn hàng phụ tùng', 'phân loại đơn hàng', 'loại đơn hàng', 'order type'])
 
     detail_po_col = find_col(po_detail_df.columns, ['order number', 'mã đơn hàng mua', 'mã đơn hàng', 'mã po', 'po'])
     detail_part_col = find_col(po_detail_df.columns, ['part#', 'part #', 'part number', 'mã phụ tùng', 'part'])
@@ -351,6 +385,7 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
         raise ValueError("File Chi tiết nhận hàng thiếu cột 'Mã PO', 'Mã phụ tùng' hoặc 'Trạng thái'.")
 
     date_lookup = {}
+    order_type_lookup = {}
     cancelled_pos = set()
     for _, row in ds_po_df.iterrows():
         po_val = clean_str(row[ds_po_col])
@@ -368,6 +403,11 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
         if ds_status_col:
             if clean_str(row[ds_status_col]) == 'CANCELLED':
                 cancelled_pos.add(po_val)
+
+        if ds_order_type_col and po_val not in order_type_lookup:
+            raw_type = row[ds_order_type_col]
+            if raw_type is not None and not pd.isna(raw_type) and str(raw_type).strip():
+                order_type_lookup[po_val] = raw_type
 
     receipt_lookup = {}
     for _, row in receipt_df.iterrows():
@@ -417,10 +457,13 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
         qty_val = parse_qty(row[detail_qty_col])
         qty_debt = qty_val if show_days else 0
 
+        order_type_label = map_order_type(order_type_lookup.get(po_code))
+
         results.append({
             'po_code': po_code,
             'part_code': part_code,
             'order_date': date_str,
+            'order_type': order_type_label,
             'status': final_status,
             'days_debt': days_diff if show_days else 0,
             'qty_debt': qty_debt
