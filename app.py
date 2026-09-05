@@ -38,7 +38,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
-    MAX_CONTENT_LENGTH=50 * 1024 * 1024,  # Giới hạn upload tối đa 50MB / request
+    MAX_CONTENT_LENGTH=200 * 1024 * 1024,  # Giới hạn upload tối đa 50MB / request
 )
 
 # Nén response (JSON, HTML) bằng gzip để giảm dung lượng truyền tải -> tải nhanh hơn
