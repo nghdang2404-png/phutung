@@ -38,7 +38,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
-    MAX_CONTENT_LENGTH=20 * 1024 * 1024,  # Giới hạn upload tối đa 20MB / request
+    MAX_CONTENT_LENGTH=50 * 1024 * 1024,  # Giới hạn upload tối đa 50MB / request
 )
 
 # Nén response (JSON, HTML) bằng gzip để giảm dung lượng truyền tải -> tải nhanh hơn
@@ -47,13 +47,43 @@ Compress(app)
 # Giới hạn số lần thử đăng nhập để chống brute-force mật khẩu
 limiter = Limiter(get_remote_address, app=app, default_limits=[], storage_uri="memory://")
 
+
+@app.errorhandler(413)
+def handle_file_too_large(e):
+    """Mặc định Flask trả về trang lỗi HTML khi vượt MAX_CONTENT_LENGTH,
+    khiến frontend (đang gọi res.json()) hiểu nhầm thành mất kết nối mạng.
+    Trả JSON để hiển thị đúng thông báo cho người dùng."""
+    limit_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
+    return jsonify({'error': f'File tải lên vượt quá giới hạn cho phép ({limit_mb}MB). Vui lòng chia nhỏ file trước khi tải lên.'}), 413
+
+
+@app.errorhandler(500)
+def handle_internal_error(e):
+    """Bắt các lỗi không lường trước (ví dụ mất kết nối DB giữa chừng) để
+    luôn trả về JSON thay vì trang lỗi HTML mặc định của Flask/Werkzeug."""
+    return jsonify({'error': 'Lỗi máy chủ nội bộ. Vui lòng thử lại sau ít phút.'}), 500
+
 # Lấy chuỗi kết nối bảo mật từ biến môi trường
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
 # Connection pool tới Postgres/Neon: tái sử dụng kết nối thay vì mở kết nối
 # TCP/TLS mới cho MỖI request (việc mở mới rất tốn thời gian, đặc biệt với
 # Neon/serverless Postgres) -> tăng tốc đáng kể cho mọi API.
-db_pool = pg_pool.SimpleConnectionPool(1, 10, DATABASE_URL, cursor_factory=RealDictCursor)
+_db_pool = None
+
+
+def _get_pool():
+    """Tạo connection pool LƯỜI BIẾNG (lazy) - chỉ tạo khi có request đầu
+    tiên thật sự cần dùng DB, thay vì tạo ngay lúc import module.
+    Lý do: Neon (Postgres serverless) có thể đang "ngủ" (autosuspend) khi
+    Render khởi động lại app; nếu tạo pool ngay lúc import mà Neon chưa kịp
+    "thức dậy", tiến trình Flask có thể bị treo/timeout ngay từ bước khởi
+    động, khiến Render coi app là "không phản hồi" và khởi động lại liên
+    tục - biểu hiện ra ngoài là các lỗi kết nối chập chờn."""
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = pg_pool.SimpleConnectionPool(1, 10, DATABASE_URL, cursor_factory=RealDictCursor)
+    return _db_pool
 
 # Số ngày lưu trữ dữ liệu "Chi tiết PO" trước khi tự động dọn dẹp
 PO_DETAIL_RETENTION_DAYS = 120
@@ -62,7 +92,26 @@ PO_DETAIL_RETENTION_DAYS = 120
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        db = g._database = db_pool.getconn()
+        pool = _get_pool()
+        db = pool.getconn()
+
+        # "Pre-ping": kiểm tra kết nối lấy từ pool còn sống hay đã bị Neon
+        # đóng do rảnh quá lâu (rất hay gặp với Postgres serverless). Nếu
+        # kết nối đã chết, loại bỏ nó khỏi pool và lấy 1 kết nối mới thay vì
+        # để lỗi "server closed the connection unexpectedly" làm hỏng cả
+        # request của người dùng.
+        try:
+            probe = db.cursor()
+            probe.execute('SELECT 1')
+            probe.close()
+        except Exception:
+            try:
+                pool.putconn(db, close=True)
+            except Exception:
+                pass
+            db = pool.getconn()
+
+        g._database = db
     return db
 
 
@@ -70,11 +119,18 @@ def get_db():
 def close_connection(exception):
     db = getattr(g, '_database', None)
     if db is not None:
+        pool = _get_pool()
         # Nếu có lỗi xảy ra giữa request mà chưa rollback, trả kết nối bẩn về
         # pool sẽ làm hỏng transaction của request tiếp theo dùng lại nó.
         if exception is not None:
-            db.rollback()
-        db_pool.putconn(db)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        try:
+            pool.putconn(db)
+        except Exception:
+            pass
 
 
 def init_db():
