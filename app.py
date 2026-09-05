@@ -506,49 +506,69 @@ def parse_inventory_excel(file_storage):
     data_start = header_row + 2
     kho_col, part_col, name_col, unit_col = 0, 1, 2, 3
 
-    # part_code -> {part_name, unit, quantities: {store_code: qty}}
-    parts_map = {}
-    skipped_rows = 0
+    # ------------------------------------------------------------------
+    # Xử lý VECTOR HOÁ bằng pandas thay vì lặp từng dòng bằng Python (vòng
+    # lặp for + .iat cho mỗi ô rất chậm với file nhiều nghìn dòng, đặc biệt
+    # trên Render free tier có CPU rất yếu - từng gây timeout/crash worker).
+    # ------------------------------------------------------------------
+    data = raw.iloc[data_start:, [kho_col, part_col, name_col, unit_col, qty_col]].copy()
+    data.columns = ['kho', 'part_code', 'part_name', 'unit', 'qty']
+
+    data['kho'] = data['kho'].astype(str).str.strip()
+    data['part_code'] = data['part_code'].astype(str).str.strip()
+    valid_mask = (
+        data['kho'].notna() & data['part_code'].notna()
+        & (data['kho'] != '') & (data['kho'].str.lower() != 'none')
+        & (data['part_code'] != '') & (data['part_code'].str.lower() != 'none')
+    )
+    data = data[valid_mask]
+
+    # Tách "KPT NS1" -> prefix="KPT", suffix="NS1". Chỉ nhận dòng có đúng 2
+    # từ (giống hệt logic _split_warehouse_code cũ).
+    kho_parts = data['kho'].str.upper().str.split()
+    valid_len_mask = kho_parts.str.len() == 2
+    skipped_rows = int((~valid_len_mask).sum())
+    data = data[valid_len_mask]
+    kho_parts = kho_parts[valid_len_mask]
+    data['prefix'] = kho_parts.str[0]
+    data['suffix'] = kho_parts.str[1]
+
+    allowed_mask = data['prefix'].isin(_INVENTORY_ALLOWED_PREFIXES) & data['suffix'].isin(_INVENTORY_ALLOWED_STORES)
+    skipped_rows += int((~allowed_mask).sum())
+    data = data[allowed_mask]
+
+    data['part_name'] = data['part_name'].fillna('').astype(str).str.strip()
+    data['unit'] = data['unit'].fillna('').astype(str).str.strip()
+    data['qty'] = pd.to_numeric(data['qty'], errors='coerce').fillna(0.0)
+
     warnings = []
-
-    for i in range(data_start, len(raw)):
-        raw_kho = raw.iat[i, kho_col]
-        raw_part = raw.iat[i, part_col]
-        if raw_kho is None or raw_part is None or str(raw_kho).strip() == '' or str(raw_part).strip() == '':
-            continue
-
-        prefix, suffix = _split_warehouse_code(raw_kho)
-        if prefix not in _INVENTORY_ALLOWED_PREFIXES or suffix not in _INVENTORY_ALLOWED_STORES:
-            skipped_rows += 1
-            continue
-
-        part_code = str(raw_part).strip()
-        part_name = str(raw.iat[i, name_col]).strip() if raw.iat[i, name_col] is not None else ''
-        unit = str(raw.iat[i, unit_col]).strip() if raw.iat[i, unit_col] is not None else ''
-        qty = float(parse_qty(raw.iat[i, qty_col]))
-
-        entry = parts_map.setdefault(part_code, {'part_name': part_name, 'unit': unit, 'quantities': {}})
-        if suffix in entry['quantities']:
-            # Mã hàng này đã có số liệu ở cùng cửa hàng từ 1 nhóm tiền tố
-            # khác (hiếm khi xảy ra) -> cộng dồn lại thay vì ghi đè, đồng
-            # thời cảnh báo để admin kiểm tra thủ công nếu cần.
-            entry['quantities'][suffix] += qty
-            warnings.append(f'Mã hàng {part_code} tại {suffix} xuất hiện ở nhiều nhóm kho khác nhau - đã cộng dồn số lượng.')
-        else:
-            entry['quantities'][suffix] = qty
-
-    # Loại hẳn các mã hàng không có mặt ở bất kỳ mã kho nào trong 18 mã cho
-    # phép (đã tự động xảy ra vì parts_map chỉ được set khi mã kho hợp lệ).
     rows = []
-    for part_code, entry in parts_map.items():
-        for store_code, qty in entry['quantities'].items():
-            rows.append({
-                'part_code': part_code,
-                'part_name': entry['part_name'],
-                'unit': entry['unit'],
-                'store_code': store_code,
-                'quantity': qty,
-            })
+
+    if not data.empty:
+        # Tên/đơn vị: lấy theo lần xuất hiện ĐẦU TIÊN của mỗi mã hàng trong
+        # file (giữ đúng thứ tự gốc) - giống hành vi parts_map.setdefault cũ.
+        name_unit = data.groupby('part_code', sort=False).agg(
+            part_name=('part_name', 'first'),
+            unit=('unit', 'first'),
+        )
+
+        # Số lượng: cộng dồn theo (Mã hàng, Cửa hàng) - xử lý trường hợp 1 mã
+        # hàng xuất hiện ở nhiều nhóm tiền tố kho khác nhau nhưng cùng 1
+        # cửa hàng (cộng dồn thay vì ghi đè, giống logic cũ).
+        qty_grouped = data.groupby(['part_code', 'suffix'], sort=False).agg(
+            quantity=('qty', 'sum'),
+            n=('qty', 'size'),
+        ).reset_index()
+
+        dup_rows = qty_grouped[qty_grouped['n'] > 1]
+        warnings = [
+            f'Mã hàng {r.part_code} tại {r.suffix} xuất hiện ở nhiều nhóm kho khác nhau - đã cộng dồn số lượng.'
+            for r in dup_rows.itertuples()
+        ]
+
+        result = qty_grouped.merge(name_unit, left_on='part_code', right_index=True, how='left')
+        result = result.rename(columns={'suffix': 'store_code'})
+        rows = result[['part_code', 'part_name', 'unit', 'store_code', 'quantity']].to_dict(orient='records')
 
     return rows, skipped_rows, warnings
 
@@ -830,13 +850,22 @@ def append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_ti
     seen_in_batch = set()
     skipped_count = 0
 
-    for _, row in po_detail_df.iterrows():
-        po_code = clean_str(row[detail_po_col])
-        part_code = clean_str(row[detail_part_col])
+    # Tránh dùng po_detail_df.iterrows() (rất chậm vì tạo 1 Series mới cho
+    # từng dòng) - thay bằng truy cập cột dạng mảng (.tolist()) và
+    # to_dict('records') một lần duy nhất, nhanh hơn đáng kể với file nhiều
+    # nghìn dòng, giảm nguy cơ vượt timeout khi chạy trên Render.
+    po_vals = po_detail_df[detail_po_col].map(clean_str).tolist()
+    part_vals = po_detail_df[detail_part_col].map(clean_str).tolist()
+    qty_vals = [float(parse_qty(v)) for v in po_detail_df[detail_qty_col].tolist()]
+    records = po_detail_df.to_dict(orient='records')
+
+    for i in range(len(records)):
+        po_code = po_vals[i]
+        part_code = part_vals[i]
         if not po_code or not part_code:
             continue
 
-        qty_val = float(parse_qty(row[detail_qty_col]))
+        qty_val = qty_vals[i]
         key = (po_code, part_code, qty_val)
 
         # Bỏ qua nếu bộ (Mã PO, Mã phụ tùng, Số lượng) này đã tồn tại trong
@@ -846,7 +875,7 @@ def append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_ti
             continue
         seen_in_batch.add(key)
 
-        row_json = json.dumps(row.to_dict(), ensure_ascii=False, default=str)
+        row_json = json.dumps(records[i], ensure_ascii=False, default=str)
         rows_to_insert.append((store_code, po_code, part_code, qty_val, row_json, po_detail_file.filename, upload_time))
 
     if rows_to_insert:
