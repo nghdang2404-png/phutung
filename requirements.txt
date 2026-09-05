@@ -6,3 +6,4 @@ python-dotenv
 gunicorn
 requests
 flask-compress
+Flask-Limiter
