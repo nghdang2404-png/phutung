@@ -142,6 +142,10 @@ def read_csv_robust(file_storage):
     """
     Đọc file CSV một cách an toàn, chống được các lỗi thường gặp:
     - Sai bảng mã (encoding) tiếng Việt.
+    - File được lưu ở dạng UTF-16 (Unicode) - dấu hiệu là 2 byte BOM đầu
+      file 0xFF 0xFE hoặc 0xFE 0xFF. Nếu bỏ qua trường hợp này, các bảng mã
+      1-byte (latin1, cp1252...) vẫn "đọc thành công" nhưng ra toàn ký tự
+      rác xen kẽ \\x00, khiến không tìm được cột nào cả.
     - Dấu phân cách không phải dấu phẩy (chấm phẩy, tab...).
     - File xuất ra có 1-2 dòng tiêu đề/giới thiệu phía trên dòng header thật,
       khiến pandas suy luận nhầm số cột ở những dòng đầu rồi báo lỗi kiểu
@@ -149,6 +153,18 @@ def read_csv_robust(file_storage):
     - Một vài dòng lỗi định dạng rải rác trong file.
     """
     encodings = ['utf-8-sig', 'utf-8', 'latin1', 'cp1258', 'cp1252']
+
+    # Ưu tiên thử UTF-16 trước nếu phát hiện BOM tương ứng (thường gặp khi
+    # file CSV được xuất ra từ các hệ thống/Excel trên Windows ở định dạng
+    # "Unicode Text").
+    file_storage.seek(0)
+    head = file_storage.read(4)
+    file_storage.seek(0)
+    if head[:2] in (b'\xff\xfe', b'\xfe\xff'):
+        encodings = ['utf-16'] + encodings
+    elif head[:4] in (b'\xff\xfe\x00\x00', b'\x00\x00\xfe\xff'):
+        encodings = ['utf-32'] + encodings
+
     last_err = None
 
     for enc in encodings:
