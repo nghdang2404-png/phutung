@@ -587,21 +587,43 @@
     }
 
     async function submitNewPassword() {
-        const username = document.getElementById('target-username').value;
-        const password = document.getElementById('new-password-input-input' ? 'new-password-input-input' : 'new-password-input').value;
-        if(!password) { alert('Vui lòng nhập mật khẩu mới'); return; }
+    const username = document.getElementById('target-username').value;
+    const passwordInput = document.getElementById('new-password-input');
+    
+    if (!passwordInput) {
+        alert('Không tìm thấy ô nhập mật khẩu!');
+        return;
+    }
 
+    const password = passwordInput.value;
+    if (!password) { 
+        alert('Vui lòng nhập mật khẩu mới!'); 
+        return; 
+    }
+
+    try {
         const res = await fetch('/api/admin/users', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({username, password})
+            body: JSON.stringify({ username, password })
         });
         const result = await res.json();
-        if(result.ok || result.success) {
+        
+        if (res.ok && (result.ok || result.success)) {
             alert('Đổi mật khẩu thành công!');
-            bootstrap.Modal.getInstance(document.getElementById('changePassModal')).hide();
-        } else { alert('Lỗi đổi mật khẩu'); }
+            const modalEl = document.getElementById('changePassModal');
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            if (modal) modal.hide();
+            // Xóa giá trị sau khi đổi thành công
+            passwordInput.value = '';
+        } else { 
+            alert('Lỗi: ' + (result.error || 'Không thể đổi mật khẩu')); 
+        }
+    } catch (e) {
+        console.error(e);
+        alert('Lỗi kết nối đến server.');
     }
+}
 
     function setupDragZones() {
         const fileInputs = [
