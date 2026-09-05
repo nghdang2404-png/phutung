@@ -206,7 +206,8 @@ def read_csv_robust(file_storage):
 _HEADER_KEYWORDS = [
     'order number', 'mã đơn hàng mua', 'mã đơn hàng', 'mã po', 'po number',
     'siebel po number', 'part#', 'part #', 'part number', 'mã phụ tùng',
-    'quantity requested', 'ngày tạo đơn hàng mua', 'ngày tạo', 'ngày đặt',
+    'quantity requested', 'số lượng yêu cầu', 'số lượng', 'quantity',
+    'ngày tạo đơn hàng mua', 'ngày tạo', 'ngày đặt',
     'ngày gửi đơn đặt hàng', 'trạng thái đơn hàng mua', 'trạng thái đơn hàng',
     'trạng thái po', 'mrn status', 'trạng thái', 'status', 'part',
 ]
@@ -311,6 +312,18 @@ def get_summary_from_data(combined_data):
     }
 
 
+def parse_qty(val):
+    """Chuyển giá trị số lượng về số (float). Trả về 0 nếu không đọc được
+    (ô trống, chữ, NaN...)."""
+    try:
+        qty = pd.to_numeric(val)
+        if pd.isna(qty):
+            return 0
+        return qty
+    except Exception:
+        return 0
+
+
 def process_data(ds_po_df, po_detail_df, receipt_df):
     ds_po_df.columns = [str(c).strip() for c in ds_po_df.columns]
     po_detail_df.columns = [str(c).strip() for c in po_detail_df.columns]
@@ -322,6 +335,7 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
 
     detail_po_col = find_col(po_detail_df.columns, ['order number', 'mã đơn hàng mua', 'mã đơn hàng', 'mã po', 'po'])
     detail_part_col = find_col(po_detail_df.columns, ['part#', 'part #', 'part number', 'mã phụ tùng', 'part'])
+    detail_qty_col = find_col(po_detail_df.columns, ['quantity requested', 'số lượng yêu cầu', 'số lượng', 'quantity'])
 
     rec_po_col = find_col(receipt_df.columns, ['siebel po number', 'po number', 'mã đơn hàng mua', 'mã đơn hàng', 'po'])
     rec_part_col = find_col(receipt_df.columns, ['part#', 'part #', 'part number', 'mã phụ tùng', 'part'])
@@ -331,6 +345,8 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
         raise ValueError("File Danh sách PO thiếu cột 'Mã PO' hoặc 'Ngày đặt'.")
     if not all([detail_po_col, detail_part_col]):
         raise ValueError("File Chi tiết PO thiếu cột 'Mã PO' hoặc 'Mã phụ tùng'.")
+    if not detail_qty_col:
+        raise ValueError("File Chi tiết PO thiếu cột 'Số lượng' (Quantity Requested).")
     if not all([rec_po_col, rec_part_col, rec_status_col]):
         raise ValueError("File Chi tiết nhận hàng thiếu cột 'Mã PO', 'Mã phụ tùng' hoặc 'Trạng thái'.")
 
@@ -395,17 +411,27 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
             final_status = 'Nợ'
 
         show_days = final_status in ('Nợ', 'Đang vận chuyển')
+        # Số lượng nợ của DÒNG này (1 PO + 1 mã phụ tùng): chỉ tính khi
+        # trạng thái đang "Nợ" hoặc "Đang vận chuyển", ngược lại là 0 vì
+        # phụ tùng đã nhận đủ hàng.
+        qty_val = parse_qty(row[detail_qty_col])
+        qty_debt = qty_val if show_days else 0
 
         results.append({
             'po_code': po_code,
             'part_code': part_code,
             'order_date': date_str,
             'status': final_status,
-            'days_debt': days_diff if show_days else 0
+            'days_debt': days_diff if show_days else 0,
+            'qty_debt': qty_debt
         })
 
     df = pd.DataFrame(results)
     if not df.empty:
+        # Cột "cộng dồn": tổng số lượng nợ (trạng thái Nợ + Đang vận chuyển)
+        # của TẤT CẢ các PO có cùng mã phụ tùng.
+        df['qty_debt_total'] = df.groupby('part_code')['qty_debt'].transform('sum')
+
         df['_sort'] = df.apply(lambda r: -r['days_debt'] if r['status'] in ('Nợ', 'Đang vận chuyển') else 0, axis=1)
         df = df.sort_values(by=['_sort', 'po_code']).drop(columns=['_sort']).reset_index(drop=True)
 

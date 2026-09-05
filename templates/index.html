@@ -276,10 +276,12 @@
                                 <th>Mã Phụ Tùng</th>
                                 <th class="text-center">Trạng Thái</th>
                                 <th class="text-end">Số Ngày</th>
+                                <th class="text-end">Số Lượng Nợ</th>
+                                <th class="text-end">Cộng Dồn Theo Phụ Tùng</th>
                             </tr>
                         </thead>
                         <tbody id="result-body">
-                            <tr><td colspan="7" class="text-center py-4 text-muted">Đang tải dữ liệu...</td></tr>
+                            <tr><td colspan="9" class="text-center py-4 text-muted">Đang tải dữ liệu...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -494,7 +496,7 @@
         const isAdmin = document.getElementById('admin-store-filter') !== null;
 
         if (data.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="7" class="text-center py-4 text-muted">Không có dữ liệu.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4 text-muted">Không có dữ liệu.</td></tr>`;
             return;
         }
 
@@ -504,6 +506,9 @@
             let orderDateHtml = (!item.order_date || item.order_date === 'N/A' || item.order_date === '') 
                 ? `<span class="text-danger fw-semibold">Cần bổ sung</span>` 
                 : `<span class="text-muted">${item.order_date}</span>`;
+
+            const qtyDebt = item.qty_debt || 0;
+            const qtyDebtTotal = item.qty_debt_total || 0;
 
             return `
                 <tr>
@@ -515,6 +520,12 @@
                     <td class="text-center"><span class="badge-status ${badgeClass}">${item.status}</span></td>
                     <td class="text-end fw-bold ${item.status === 'Nợ' ? 'text-danger' : (item.status === 'Đang vận chuyển' ? 'text-warning' : 'text-muted')}">
                         ${item.status !== 'Đã nhận hàng' ? `${item.days_debt} ngày` : '-'}
+                    </td>
+                    <td class="text-end fw-semibold ${qtyDebt > 0 ? 'text-danger' : 'text-muted'}">
+                        ${qtyDebt > 0 ? qtyDebt.toLocaleString() : '-'}
+                    </td>
+                    <td class="text-end fw-bold ${qtyDebtTotal > 0 ? 'text-danger' : 'text-muted'}">
+                        ${qtyDebtTotal > 0 ? qtyDebtTotal.toLocaleString() : '-'}
                     </td>
                 </tr>
             `;
