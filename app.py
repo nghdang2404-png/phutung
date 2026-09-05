@@ -4,7 +4,7 @@ from datetime import datetime
 import pandas as pd
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, g
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values
 from dotenv import load_dotenv
 
 # Nạp các biến bảo mật từ file .env
@@ -16,11 +16,16 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'honda_po_secret_key_secure_
 # Lấy chuỗi kết nối bảo mật từ biến môi trường
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
+# Số ngày lưu trữ dữ liệu "Chi tiết PO" trước khi tự động dọn dẹp
+PO_DETAIL_RETENTION_DAYS = 120
+
+
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
         db = g._database = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return db
+
 
 @app.teardown_appcontext
 def close_connection(exception):
@@ -28,12 +33,13 @@ def close_connection(exception):
     if db is not None:
         db.close()
 
+
 def init_db():
     """Khởi tạo bảng và dữ liệu mẫu trên Neon PostgreSQL"""
     with app.app_context():
         db = get_db()
         cursor = db.cursor()
-        
+
         # 1. Tạo bảng users
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -43,22 +49,52 @@ def init_db():
                 store_code VARCHAR(20) NOT NULL
             )
         ''')
-        
-        # 2. Tạo bảng upload_history
+
+        # 2. Bảng nhật ký các lượt tải file (chỉ để hiển thị lịch sử, không dùng để tính toán)
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS upload_history (
+            CREATE TABLE IF NOT EXISTS upload_log (
                 id SERIAL PRIMARY KEY,
                 store_code VARCHAR(20) NOT NULL,
                 upload_time TIMESTAMP NOT NULL,
                 ds_po_filename TEXT,
                 po_detail_filename TEXT,
-                receipt_filename TEXT,
-                summary_json TEXT,
-                result_json TEXT
+                receipt_filename TEXT
             )
         ''')
-        
-        # 3. Seed default users nếu chưa có
+
+        # 3. Bảng lưu dữ liệu MỚI NHẤT của "Danh sách PO" và "Chi tiết nhận hàng"
+        #    -> mỗi lần có file mới sẽ GHI ĐÈ (xoá sạch + thay thế) cho từng cửa hàng.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS latest_uploads (
+                store_code VARCHAR(20) PRIMARY KEY,
+                ds_po_filename TEXT,
+                ds_po_json TEXT,
+                ds_po_upload_time TIMESTAMP,
+                receipt_filename TEXT,
+                receipt_json TEXT,
+                receipt_upload_time TIMESTAMP
+            )
+        ''')
+
+        # 4. Bảng lưu dữ liệu "Chi tiết PO" theo kiểu CỘNG DỒN (append).
+        #    Mỗi dòng dữ liệu được lưu kèm thời điểm nhập (upload_time) để
+        #    có thể tự động xoá các dòng đã nhập quá 120 ngày mà không ảnh
+        #    hưởng tới các dữ liệu khác.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS po_detail_items (
+                id SERIAL PRIMARY KEY,
+                store_code VARCHAR(20) NOT NULL,
+                po_code VARCHAR(100) NOT NULL,
+                part_code VARCHAR(100) NOT NULL,
+                row_json TEXT NOT NULL,
+                filename TEXT,
+                upload_time TIMESTAMP NOT NULL
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_po_detail_store ON po_detail_items(store_code)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_po_detail_upload_time ON po_detail_items(upload_time)')
+
+        # 5. Seed default users nếu chưa có
         cursor.execute("SELECT COUNT(*) FROM users")
         count = cursor.fetchone()['count']
         if count == 0:
@@ -72,17 +108,20 @@ def init_db():
                 ('NSM1', 'nsm1123', 'store', 'NSM1'),
             ]
             cursor.executemany("INSERT INTO users (username, password, role, store_code) VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING", default_users)
-        
+
         db.commit()
         cursor.close()
 
+
 # Tự động gọi khởi tạo bảng khi chạy app
 init_db()
+
 
 def clean_str(val):
     if pd.isna(val):
         return ""
     return str(val).strip().upper()
+
 
 def find_col(columns, patterns):
     lower_map = {c: str(c).strip().lower() for c in columns}
@@ -92,35 +131,70 @@ def find_col(columns, patterns):
                 return c
     return None
 
-def read_any(file_storage):
+
+def _looks_usable(df):
+    """Một DataFrame được coi là hợp lệ khi có nhiều hơn 1 cột (tức là đã
+    tách đúng dấu phân cách, không bị dồn hết dữ liệu vào 1 cột)."""
+    return df is not None and df.shape[1] > 1
+
+
+def read_csv_robust(file_storage):
     """
-    Hàm đọc file thông minh: Tự động nhận diện file Excel hoặc tự động thử 
-    các bảng mã của file CSV để chống lỗi mã hóa.
+    Đọc file CSV một cách an toàn, chống được các lỗi thường gặp:
+    - Sai bảng mã (encoding) tiếng Việt.
+    - Dấu phân cách không phải dấu phẩy (chấm phẩy, tab...).
+    - File xuất ra có 1-2 dòng tiêu đề/giới thiệu phía trên dòng header thật,
+      khiến pandas suy luận nhầm số cột ở những dòng đầu rồi báo lỗi kiểu
+      "Error tokenizing data. Expected 1 fields in line 3, saw 3".
+    - Một vài dòng lỗi định dạng rải rác trong file.
     """
-    filename = (file_storage.filename or "").lower()
-    
-    # Xử lý file Excel
-    if filename.endswith(('.xlsx', '.xls')):
-        df = pd.read_excel(file_storage)
-    
-    # Xử lý file CSV với cơ chế dự phòng nhiều bảng mã khác nhau
-    elif filename.endswith('.csv'):
-        encodings = ['utf-8-sig', 'utf-8', 'latin1', 'cp1258', 'cp1252']
-        df = None
-        for enc in encodings:
+    encodings = ['utf-8-sig', 'utf-8', 'latin1', 'cp1258', 'cp1252']
+    last_err = None
+
+    for enc in encodings:
+        # 1) Thử đọc bình thường, để pandas tự dò dấu phân cách (sep=None)
+        try:
+            file_storage.seek(0)
+            df = pd.read_csv(file_storage, encoding=enc, sep=None, engine='python')
+            if _looks_usable(df):
+                return df
+        except Exception as e:
+            last_err = e
+
+        # 2) Nếu file có vài dòng tiêu đề rác phía trên header thật, thử bỏ
+        #    qua lần lượt 1-5 dòng đầu để tìm đúng dòng header
+        for skip in range(1, 6):
             try:
                 file_storage.seek(0)
-                df = pd.read_csv(file_storage, encoding=enc)
-                break
-            except UnicodeDecodeError:
-                continue
-            except Exception:
-                continue
-        
-        # Nếu vẫn không đọc được, dùng latin1 (đã bao quát toàn bộ byte, không cần errors='ignore')
-        if df is None:
+                df = pd.read_csv(file_storage, encoding=enc, sep=None, engine='python', skiprows=skip)
+                if _looks_usable(df):
+                    return df
+            except Exception as e:
+                last_err = e
+
+        # 3) Cuối cùng, chấp nhận bỏ qua các dòng lỗi định dạng rải rác
+        try:
             file_storage.seek(0)
-            df = pd.read_csv(file_storage, encoding='latin1')
+            df = pd.read_csv(file_storage, encoding=enc, on_bad_lines='skip', engine='python')
+            if df is not None and df.shape[1] >= 1:
+                return df
+        except Exception as e:
+            last_err = e
+
+    raise ValueError(f"Không thể đọc được file CSV (định dạng/bảng mã không hợp lệ). Chi tiết: {last_err}")
+
+
+def read_any(file_storage):
+    """
+    Hàm đọc file thông minh: Tự động nhận diện file Excel hoặc tự động thử
+    các bảng mã/định dạng của file CSV để chống lỗi mã hóa và lỗi cấu trúc.
+    """
+    filename = (file_storage.filename or "").lower()
+
+    if filename.endswith(('.xlsx', '.xls')):
+        df = pd.read_excel(file_storage)
+    elif filename.endswith('.csv'):
+        df = read_csv_robust(file_storage)
     else:
         # Trường hợp định dạng khác, thử đọc như Excel trước, lỗi thì đọc như CSV
         try:
@@ -128,29 +202,30 @@ def read_any(file_storage):
             df = pd.read_excel(file_storage)
         except Exception:
             file_storage.seek(0)
-            df = pd.read_csv(file_storage, encoding='latin1')
+            df = read_csv_robust(file_storage)
 
     df.columns = [str(c).strip() for c in df.columns]
     return df
+
 
 def get_summary_from_data(combined_data):
     total = len(combined_data)
     debt = sum(1 for x in combined_data if x['status'] == 'Nợ')
     shipping = sum(1 for x in combined_data if x['status'] == 'Đang vận chuyển')
     received = sum(1 for x in combined_data if x['status'] == 'Đã nhận hàng')
-    
+
     valid_dates = []
     for x in combined_data:
         d_str = x.get('order_date')
         if d_str and d_str != 'Chưa có dữ liệu':
             try:
                 valid_dates.append(datetime.strptime(d_str, '%d/%m/%Y'))
-            except:
+            except Exception:
                 pass
-                
+
     min_date = min(valid_dates).strftime('%d/%m/%Y') if valid_dates else 'Chưa có dữ liệu'
     max_date = max(valid_dates).strftime('%d/%m/%Y') if valid_dates else 'Chưa có dữ liệu'
-    
+
     return {
         'total': total,
         'debt': debt,
@@ -159,6 +234,7 @@ def get_summary_from_data(combined_data):
         'min_date': min_date,
         'max_date': max_date
     }
+
 
 def process_data(ds_po_df, po_detail_df, receipt_df):
     ds_po_df.columns = [str(c).strip() for c in ds_po_df.columns]
@@ -187,7 +263,8 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
     cancelled_pos = set()
     for _, row in ds_po_df.iterrows():
         po_val = clean_str(row[ds_po_col])
-        if not po_val: continue
+        if not po_val:
+            continue
         try:
             order_date = pd.to_datetime(row[ds_date_col], dayfirst=True)
         except Exception:
@@ -222,7 +299,8 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
             continue
 
         pair_key = (po_code, part_code)
-        if pair_key in seen_pairs: continue
+        if pair_key in seen_pairs:
+            continue
         seen_pairs.add(pair_key)
 
         order_date = date_lookup.get(po_code)
@@ -258,6 +336,113 @@ def process_data(ds_po_df, po_detail_df, receipt_df):
 
     return df
 
+
+# ----------------------------------------------------------------------------
+# Data storage helpers (thay thế / cộng dồn / dọn dẹp)
+# ----------------------------------------------------------------------------
+
+def cleanup_old_po_detail(cursor):
+    """Xoá các dòng 'Chi tiết PO' đã được nhập quá PO_DETAIL_RETENTION_DAYS
+    ngày. Các dữ liệu khác (Danh sách PO, Chi tiết nhận hàng, users...) không
+    bị ảnh hưởng."""
+    cursor.execute(
+        "DELETE FROM po_detail_items WHERE upload_time < NOW() - INTERVAL '%s days'" % PO_DETAIL_RETENTION_DAYS
+    )
+
+
+def save_ds_po_and_receipt(cursor, store_code, ds_po_file, ds_po_df, receipt_file, receipt_df, upload_time):
+    """Danh sách PO và Chi tiết nhận hàng: XOÁ SẠCH dữ liệu cũ của cửa hàng
+    này và THAY THẾ hoàn toàn bằng dữ liệu mới."""
+    ds_po_json = json.dumps(ds_po_df.to_dict(orient='records'), ensure_ascii=False, default=str)
+    receipt_json = json.dumps(receipt_df.to_dict(orient='records'), ensure_ascii=False, default=str)
+
+    cursor.execute('''
+        INSERT INTO latest_uploads (store_code, ds_po_filename, ds_po_json, ds_po_upload_time,
+                                     receipt_filename, receipt_json, receipt_upload_time)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (store_code) DO UPDATE SET
+            ds_po_filename = EXCLUDED.ds_po_filename,
+            ds_po_json = EXCLUDED.ds_po_json,
+            ds_po_upload_time = EXCLUDED.ds_po_upload_time,
+            receipt_filename = EXCLUDED.receipt_filename,
+            receipt_json = EXCLUDED.receipt_json,
+            receipt_upload_time = EXCLUDED.receipt_upload_time
+    ''', (store_code, ds_po_file.filename, ds_po_json, upload_time,
+          receipt_file.filename, receipt_json, upload_time))
+
+
+def append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_time):
+    """Chi tiết PO: GHI THÊM vào dữ liệu cũ (không xoá gì cả). Việc dọn dẹp
+    dữ liệu quá hạn 120 ngày được xử lý riêng ở cleanup_old_po_detail()."""
+    detail_po_col = find_col(po_detail_df.columns, ['order number', 'mã đơn hàng mua', 'mã đơn hàng', 'mã po', 'po'])
+    detail_part_col = find_col(po_detail_df.columns, ['part#', 'part #', 'part number', 'mã phụ tùng', 'part'])
+
+    if not detail_po_col or not detail_part_col:
+        raise ValueError("File Chi tiết PO thiếu cột 'Mã PO' hoặc 'Mã phụ tùng'.")
+
+    rows_to_insert = []
+    for _, row in po_detail_df.iterrows():
+        po_code = clean_str(row[detail_po_col])
+        part_code = clean_str(row[detail_part_col])
+        if not po_code or not part_code:
+            continue
+        row_json = json.dumps(row.to_dict(), ensure_ascii=False, default=str)
+        rows_to_insert.append((store_code, po_code, part_code, row_json, po_detail_file.filename, upload_time))
+
+    if rows_to_insert:
+        execute_values(
+            cursor,
+            '''INSERT INTO po_detail_items (store_code, po_code, part_code, row_json, filename, upload_time)
+               VALUES %s''',
+            rows_to_insert
+        )
+
+
+def load_store_dataframes(cursor, store_code):
+    """Tải dữ liệu hiện có của 1 cửa hàng để tính toán bảng đối soát:
+    - ds_po_df / receipt_df: lấy bản MỚI NHẤT (đã bị thay thế mỗi lần upload).
+    - po_detail_df: lấy TOÀN BỘ dữ liệu còn hiệu lực (đã cộng dồn, chưa quá 120 ngày).
+    Trả về (ds_po_df, po_detail_df, receipt_df) hoặc None nếu chưa đủ dữ liệu.
+    """
+    cursor.execute("SELECT ds_po_json, receipt_json FROM latest_uploads WHERE store_code = %s", (store_code,))
+    latest = cursor.fetchone()
+    if not latest or not latest['ds_po_json'] or not latest['receipt_json']:
+        return None
+
+    # Lấy theo thứ tự upload_time giảm dần: bản ghi nhập SAU sẽ được ưu tiên
+    # nếu có cùng cặp (Mã PO, Mã phụ tùng) xuất hiện ở nhiều lần nhập khác nhau.
+    cursor.execute(
+        "SELECT row_json FROM po_detail_items WHERE store_code = %s ORDER BY upload_time DESC",
+        (store_code,)
+    )
+    detail_rows = cursor.fetchall()
+    if not detail_rows:
+        return None
+
+    ds_po_df = pd.DataFrame(json.loads(latest['ds_po_json']))
+    receipt_df = pd.DataFrame(json.loads(latest['receipt_json']))
+    po_detail_df = pd.DataFrame([json.loads(r['row_json']) for r in detail_rows])
+
+    return ds_po_df, po_detail_df, receipt_df
+
+
+def compute_result_for_store(cursor, store_code):
+    """Tính bảng đối soát hiện tại cho 1 cửa hàng, dựa trên dữ liệu mới nhất
+    của Danh sách PO / Chi tiết nhận hàng và toàn bộ dữ liệu Chi tiết PO còn
+    hiệu lực (trong 120 ngày)."""
+    dfs = load_store_dataframes(cursor, store_code)
+    if dfs is None:
+        return []
+
+    ds_po_df, po_detail_df, receipt_df = dfs
+    try:
+        result_df = process_data(ds_po_df, po_detail_df, receipt_df)
+    except Exception:
+        return []
+
+    return result_df.to_dict(orient='records')
+
+
 # ----------------------------------------------------------------------------
 # Routes & Endpoints
 # ----------------------------------------------------------------------------
@@ -268,18 +453,19 @@ def index():
         return redirect(url_for('login'))
     return render_template('index.html', user=session['user'], role=session['role'], store_code=session['store_code'])
 
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form.get('username').strip()
         password = request.form.get('password').strip()
-        
+
         db = get_db()
         cursor = db.cursor()
         cursor.execute("SELECT * FROM users WHERE username = %s AND password = %s", (username, password))
         user = cursor.fetchone()
         cursor.close()
-        
+
         if user:
             session['user'] = user['username']
             session['role'] = user['role']
@@ -289,10 +475,12 @@ def login():
             return render_template('login.html', error="Sai tên đăng nhập hoặc mật khẩu!")
     return render_template('login.html')
 
+
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('login'))
+
 
 @app.route('/api/upload', methods=['POST'])
 def upload_files():
@@ -315,27 +503,38 @@ def upload_files():
         po_detail_df = read_any(po_detail_file)
         receipt_df = read_any(receipt_file)
 
-        res_df = process_data(ds_po_df, po_detail_df, receipt_df)
-        data_dicts = res_df.to_dict(orient='records')
-        
-        summary = get_summary_from_data(data_dicts)
-
-        upload_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        result_json = json.dumps(data_dicts, ensure_ascii=False)
-        summary_json = json.dumps(summary)
+        upload_time = datetime.now()
+        upload_time_str = upload_time.strftime('%Y-%m-%d %H:%M:%S')
 
         db = get_db()
         cursor = db.cursor()
+
+        # 1) Danh sách PO + Chi tiết nhận hàng: xoá sạch & thay thế
+        save_ds_po_and_receipt(cursor, store_code, ds_po_file, ds_po_df, receipt_file, receipt_df, upload_time)
+
+        # 2) Chi tiết PO: ghi thêm vào dữ liệu cũ
+        append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_time)
+
+        # 3) Dọn dẹp dữ liệu Chi tiết PO đã quá 120 ngày (các dữ liệu khác giữ nguyên)
+        cleanup_old_po_detail(cursor)
+
+        # 4) Ghi log lượt tải (chỉ phục vụ hiển thị lịch sử)
         cursor.execute('''
-            INSERT INTO upload_history (store_code, upload_time, ds_po_filename, po_detail_filename, receipt_filename, summary_json, result_json)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ''', (store_code, upload_time, ds_po_file.filename, po_detail_file.filename, receipt_file.filename, summary_json, result_json))
+            INSERT INTO upload_log (store_code, upload_time, ds_po_filename, po_detail_filename, receipt_filename)
+            VALUES (%s, %s, %s, %s, %s)
+        ''', (store_code, upload_time_str, ds_po_file.filename, po_detail_file.filename, receipt_file.filename))
+
         db.commit()
+
+        # 5) Tính lại bảng đối soát mới nhất cho cửa hàng này
+        data_dicts = compute_result_for_store(cursor, store_code)
+        summary = get_summary_from_data(data_dicts)
         cursor.close()
 
-        return jsonify({'success': True, 'data': data_dicts, 'summary': summary, 'upload_time': upload_time})
+        return jsonify({'success': True, 'data': data_dicts, 'summary': summary, 'upload_time': upload_time_str})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/data', methods=['GET'])
 def get_data():
@@ -348,27 +547,38 @@ def get_data():
 
     db = get_db()
     cursor = db.cursor()
+
     if role == 'store':
         target_store = store_code_session
 
+    # Dọn dẹp dữ liệu Chi tiết PO quá hạn trước khi tính toán
+    cleanup_old_po_detail(cursor)
+    db.commit()
+
+    combined_data = []
+
     if target_store == 'ALL' and role == 'admin':
         cursor.execute('''
-            SELECT * FROM upload_history h1 
-            WHERE upload_time = (SELECT MAX(upload_time) FROM upload_history h2 WHERE h2.store_code = h1.store_code)
+            SELECT DISTINCT store_code FROM (
+                SELECT store_code FROM latest_uploads
+                UNION
+                SELECT store_code FROM po_detail_items
+            ) AS stores
         ''')
-    else:
-        cursor.execute('SELECT * FROM upload_history WHERE store_code = %s ORDER BY upload_time DESC LIMIT 1', (target_store,))
+        store_codes = [r['store_code'] for r in cursor.fetchall()]
 
-    rows = cursor.fetchall()
-    cursor.close()
-    
-    combined_data = []
-    for row in rows:
-        if row['result_json']:
-            items = json.loads(row['result_json'])
+        for sc in store_codes:
+            items = compute_result_for_store(cursor, sc)
             for itm in items:
-                itm['store_code'] = row['store_code']
+                itm['store_code'] = sc
                 combined_data.append(itm)
+    else:
+        items = compute_result_for_store(cursor, target_store)
+        for itm in items:
+            itm['store_code'] = target_store
+            combined_data.append(itm)
+
+    cursor.close()
 
     summary = get_summary_from_data(combined_data)
 
@@ -378,27 +588,30 @@ def get_data():
         'summary': summary
     })
 
+
 @app.route('/api/history', methods=['GET'])
 def get_history():
-    if 'user' not in session: return jsonify({'error': 'Unauthorized'}), 401
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
     store_code = session['store_code'] if session['role'] == 'store' else request.args.get('store', 'ALL')
-    
+
     db = get_db()
     cursor = db.cursor()
     if store_code == 'ALL':
-        cursor.execute('SELECT id, store_code, upload_time, ds_po_filename, po_detail_filename, receipt_filename FROM upload_history ORDER BY upload_time DESC LIMIT 50')
+        cursor.execute('SELECT id, store_code, upload_time, ds_po_filename, po_detail_filename, receipt_filename FROM upload_log ORDER BY upload_time DESC LIMIT 50')
     else:
-        cursor.execute('SELECT id, store_code, upload_time, ds_po_filename, po_detail_filename, receipt_filename FROM upload_history WHERE store_code = %s ORDER BY upload_time DESC', (store_code,))
-    
+        cursor.execute('SELECT id, store_code, upload_time, ds_po_filename, po_detail_filename, receipt_filename FROM upload_log WHERE store_code = %s ORDER BY upload_time DESC', (store_code,))
+
     history = [dict(row) for row in cursor.fetchall()]
     cursor.close()
     return jsonify({'success': True, 'history': history})
+
 
 @app.route('/api/admin/users', methods=['GET', 'POST'])
 def admin_users():
     if 'user' not in session or session['role'] != 'admin':
         return jsonify({'error': 'Forbidden'}), 403
-    
+
     db = get_db()
     cursor = db.cursor()
     if request.method == 'POST':
@@ -417,6 +630,7 @@ def admin_users():
     users = [dict(row) for row in cursor.fetchall()]
     cursor.close()
     return jsonify({'success': True, 'users': users})
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
