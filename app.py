@@ -382,6 +382,71 @@ def init_db():
             )
         ''')
 
+        # 8b. Bảng lưu PHIẾU XIN LUÂN CHUYỂN NỘI BỘ giữa các cửa hàng. Mỗi
+        #     phiếu có 1 cửa hàng gửi (from_store), 1 cửa hàng được xin
+        #     (to_store) và có thể chứa NHIỀU mã hàng (xem bảng
+        #     transfer_items bên dưới). to_store chỉ cần xử lý 1 lần duy
+        #     nhất cho cả phiếu: Đồng ý hoặc Từ chối - không còn bước
+        #     "Đã soạn/Chưa soạn" trung gian nữa. Admin xem được toàn bộ
+        #     phiếu của mọi cửa hàng.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transfer_requests (
+                id SERIAL PRIMARY KEY,
+                from_store VARCHAR(20) NOT NULL,
+                to_store VARCHAR(20) NOT NULL,
+                note TEXT,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                reject_reason TEXT,
+                created_by VARCHAR(50) NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                responded_by VARCHAR(50),
+                responded_at TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transfer_from_store ON transfer_requests(from_store)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transfer_to_store ON transfer_requests(to_store)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transfer_updated_at ON transfer_requests(updated_at)')
+
+        # 8c. Bảng lưu TỪNG MÃ HÀNG bên trong 1 phiếu luân chuyển (1 phiếu -
+        #     nhiều dòng). Cột "received" đánh dấu cửa hàng xin (from_store)
+        #     đã thực nhận được đúng mã hàng đó hay chưa - khi tick nhận
+        #     hàng, ghi chú tô màu tồn kho của mã này sẽ tự biến mất.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transfer_items (
+                id SERIAL PRIMARY KEY,
+                request_id INTEGER NOT NULL REFERENCES transfer_requests(id) ON DELETE CASCADE,
+                part_code VARCHAR(100) NOT NULL,
+                part_name TEXT,
+                quantity NUMERIC,
+                received BOOLEAN NOT NULL DEFAULT FALSE,
+                received_at TIMESTAMP
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transfer_items_request ON transfer_items(request_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transfer_items_part ON transfer_items(part_code)')
+
+        # 8d. Migration từ schema CŨ (1 phiếu = đúng 1 mã hàng, có bước "Đã
+        #     soạn/Chưa soạn") sang schema MỚI (1 phiếu - nhiều mã hàng,
+        #     không còn bước soạn hàng). Chỉ chạy 1 lần duy nhất, tự động
+        #     phát hiện qua sự tồn tại của cột "part_code" cũ trên bảng
+        #     transfer_requests - nếu đã migrate rồi thì cột này không còn.
+        cursor.execute('''
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'transfer_requests' AND column_name = 'part_code'
+        ''')
+        if cursor.fetchone():
+            cursor.execute('''
+                INSERT INTO transfer_items (request_id, part_code, part_name, quantity, received, received_at)
+                SELECT id, part_code, part_name, quantity,
+                       (status = 'approved' AND prepare_status = 'da_soan'), NULL
+                FROM transfer_requests WHERE part_code IS NOT NULL
+            ''')
+            cursor.execute('ALTER TABLE transfer_requests DROP COLUMN IF EXISTS part_code')
+            cursor.execute('ALTER TABLE transfer_requests DROP COLUMN IF EXISTS part_name')
+            cursor.execute('ALTER TABLE transfer_requests DROP COLUMN IF EXISTS quantity')
+            cursor.execute('ALTER TABLE transfer_requests DROP COLUMN IF EXISTS prepare_status')
+
         # 9. Seed default users nếu chưa có
         cursor.execute("SELECT COUNT(*) FROM users")
         count = cursor.fetchone()['count']
@@ -1523,6 +1588,13 @@ def get_version():
     ''')
     users_version = cursor.fetchone()['v']
 
+    # Luân chuyển nội bộ: đổi khi có yêu cầu mới, hoặc yêu cầu cũ được phản
+    # hồi/cập nhật trạng thái soạn hàng (tất cả các thao tác đều cập nhật
+    # cột updated_at, nên chỉ cần lấy mốc lớn nhất).
+    cursor.execute('SELECT MAX(updated_at) AS v FROM transfer_requests')
+    transfer_row = cursor.fetchone()
+    transfer_version = transfer_row['v'] if transfer_row else None
+
     cursor.close()
 
     return jsonify({
@@ -1531,6 +1603,7 @@ def get_version():
         'history_version': history_version,
         'inventory_version': str(inventory_version) if inventory_version else None,
         'users_version': users_version,
+        'transfer_version': str(transfer_version) if transfer_version else None,
     })
 
 
@@ -1640,6 +1713,43 @@ def admin_users():
     return jsonify({'success': True, 'users': users})
 
 
+@app.route('/api/admin/db-size', methods=['GET'])
+def admin_db_size():
+    """Trả về dung lượng tổng của database và dung lượng từng bảng chính,
+    để admin theo dõi mức sử dụng so với hạn mức 500MB của gói Free
+    Supabase ngay trên giao diện, không cần vào SQL Editor."""
+    if 'user' not in session or session['role'] != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    db = get_db()
+    cursor = db.cursor()
+
+    cursor.execute("SELECT pg_database_size(current_database()) AS bytes")
+    total_bytes = cursor.fetchone()['bytes']
+
+    cursor.execute('''
+        SELECT
+            relname AS table_name,
+            pg_total_relation_size(relid) AS bytes,
+            n_live_tup AS row_count
+        FROM pg_stat_user_tables
+        ORDER BY pg_total_relation_size(relid) DESC
+    ''')
+    tables = [dict(row) for row in cursor.fetchall()]
+    cursor.close()
+
+    # Hạn mức gói Free của Supabase (500 MB) - đổi số này nếu bạn nâng gói.
+    LIMIT_BYTES = 500 * 1024 * 1024
+
+    return jsonify({
+        'success': True,
+        'total_bytes': total_bytes,
+        'limit_bytes': LIMIT_BYTES,
+        'percent_used': round(total_bytes / LIMIT_BYTES * 100, 2),
+        'tables': tables
+    })
+
+
 @app.route('/api/admin/delete-store-data', methods=['POST'])
 def delete_store_data():
     """Xoá SẠCH toàn bộ dữ liệu PO đã lưu (Danh sách PO, Chi tiết PO, Chi
@@ -1670,6 +1780,477 @@ def delete_store_data():
     cursor.close()
 
     return jsonify({'success': True, 'store_code': store_code})
+
+
+
+
+# ----------------------------------------------------------------------------
+# LUÂN CHUYỂN NỘI BỘ GIỮA CÁC CỬA HÀNG
+# ----------------------------------------------------------------------------
+
+def _valid_store_codes(cursor):
+    """Danh sách mã cửa hàng hợp lệ (role='store'), dùng để chặn việc gửi
+    yêu cầu tới một 'cửa hàng' không tồn tại trong hệ thống."""
+    cursor.execute("SELECT DISTINCT store_code FROM users WHERE role = 'store'")
+    return {r['store_code'] for r in cursor.fetchall()}
+
+
+def _fetch_transfer_items(cursor, request_ids):
+    """Lấy toàn bộ dòng mã hàng (transfer_items) thuộc danh sách phiếu
+    request_ids, trả về dict {request_id: [item, ...]} để gắn vào từng
+    phiếu khi serialize - tránh N+1 query (1 query DUY NHẤT cho mọi phiếu)."""
+    if not request_ids:
+        return {}
+    cursor.execute(
+        'SELECT * FROM transfer_items WHERE request_id = ANY(%s) ORDER BY id',
+        (list(request_ids),)
+    )
+    out = {}
+    for it in cursor.fetchall():
+        d = dict(it)
+        if d.get('quantity') is not None:
+            d['quantity'] = float(d['quantity'])
+        if d.get('received_at'):
+            d['received_at'] = format_vi_datetime(d['received_at'])
+        out.setdefault(d['request_id'], []).append(d)
+    return out
+
+
+def _serialize_transfer_row(row, items, session_store, role):
+    d = dict(row)
+    if d.get('created_at'):
+        d['created_at'] = format_vi_datetime(d['created_at'])
+    if d.get('responded_at'):
+        d['responded_at'] = format_vi_datetime(d['responded_at'])
+    d['items'] = items
+    d['item_count'] = len(items)
+    d['total_quantity'] = sum((it['quantity'] or 0) for it in items)
+    d['all_received'] = bool(items) and all(it['received'] for it in items)
+    d['any_received'] = any(it['received'] for it in items)
+    # Gắn nhãn chiều của yêu cầu so với cửa hàng đang đăng nhập, để frontend
+    # tách hiển thị "Đã gửi" / "Nhận được" mà không cần tự so sánh store_code.
+    if role == 'store':
+        d['direction'] = 'sent' if d['from_store'] == session_store else 'received'
+    else:
+        d['direction'] = None
+    return d
+
+
+@app.route('/api/transfer/list', methods=['GET'])
+def transfer_list():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    role = session['role']
+    store_code = session['store_code']
+
+    db = get_db()
+    cursor = db.cursor()
+
+    if role == 'admin':
+        filter_store = request.args.get('store')
+        if filter_store and filter_store != 'ALL':
+            cursor.execute('''
+                SELECT * FROM transfer_requests
+                WHERE from_store = %s OR to_store = %s
+                ORDER BY updated_at DESC
+            ''', (filter_store, filter_store))
+        else:
+            cursor.execute('SELECT * FROM transfer_requests ORDER BY updated_at DESC')
+    else:
+        cursor.execute('''
+            SELECT * FROM transfer_requests
+            WHERE from_store = %s OR to_store = %s
+            ORDER BY updated_at DESC
+        ''', (store_code, store_code))
+
+    rows = cursor.fetchall()
+    items_by_request = _fetch_transfer_items(cursor, [r['id'] for r in rows])
+    cursor.close()
+
+    requests_out = [
+        _serialize_transfer_row(r, items_by_request.get(r['id'], []), store_code, role)
+        for r in rows
+    ]
+    return jsonify({'success': True, 'requests': requests_out})
+
+
+def _create_transfer_request(cursor, from_store, to_store, note, created_by, items):
+    """Tạo 1 phiếu luân chuyển + toàn bộ dòng mã hàng của phiếu đó trong
+    CÙNG 1 transaction. `items` là list dict {part_code, part_name, quantity}
+    đã được làm sạch/kiểm tra hợp lệ từ trước. Trả về id phiếu vừa tạo."""
+    now = vn_now()
+    cursor.execute('''
+        INSERT INTO transfer_requests (from_store, to_store, note, status, created_by, created_at, updated_at)
+        VALUES (%s, %s, %s, 'pending', %s, %s, %s)
+        RETURNING id
+    ''', (from_store, to_store, note, created_by, now, now))
+    new_id = cursor.fetchone()['id']
+    execute_values(
+        cursor,
+        '''INSERT INTO transfer_items (request_id, part_code, part_name, quantity)
+           VALUES %s''',
+        [(new_id, it['part_code'], it.get('part_name'), it['quantity']) for it in items]
+    )
+    return new_id
+
+
+def _clean_transfer_items(raw_items):
+    """Chuẩn hoá + kiểm tra danh sách mã hàng gửi lên (từ form nhập tay hoặc
+    từ file Excel import). Trả về (items_sạch, lỗi_hoặc_None). Nếu cùng 1 mã
+    hàng xuất hiện nhiều lần thì cộng dồn số lượng lại thay vì tạo 2 dòng."""
+    if not raw_items or not isinstance(raw_items, list):
+        return None, 'Vui lòng nhập ít nhất 1 mã hàng cần xin.'
+
+    merged = {}
+    order = []
+    for it in raw_items:
+        part_code = str((it.get('part_code') or '')).strip()
+        if not part_code:
+            continue
+        try:
+            qty = float(it.get('quantity'))
+        except (TypeError, ValueError):
+            qty = None
+        if qty is None or qty <= 0:
+            return None, f'Số lượng không hợp lệ cho mã hàng "{part_code}".'
+        part_name = (it.get('part_name') or '').strip() or None
+        key = part_code.upper()
+        if key in merged:
+            merged[key]['quantity'] += qty
+            if not merged[key]['part_name'] and part_name:
+                merged[key]['part_name'] = part_name
+        else:
+            merged[key] = {'part_code': part_code, 'part_name': part_name, 'quantity': qty}
+            order.append(key)
+
+    if not merged:
+        return None, 'Vui lòng nhập ít nhất 1 mã hàng cần xin hợp lệ.'
+    return [merged[k] for k in order], None
+
+
+@app.route('/api/transfer/create', methods=['POST'])
+def transfer_create():
+    """Cửa hàng tạo 1 phiếu xin luân chuyển - có thể chứa NHIỀU mã hàng
+    cùng lúc (mỗi mã hàng kèm số lượng riêng), gửi tới 1 cửa hàng khác."""
+    if 'user' not in session or session['role'] != 'store':
+        return jsonify({'error': 'Chỉ tài khoản cửa hàng mới được tạo yêu cầu luân chuyển.'}), 403
+
+    data = request.json or {}
+    from_store = session['store_code']
+    to_store = (data.get('to_store') or '').strip().upper()
+    note = (data.get('note') or '').strip() or None
+
+    items, err = _clean_transfer_items(data.get('items'))
+    if err:
+        return jsonify({'error': err}), 400
+
+    if not to_store:
+        return jsonify({'error': 'Vui lòng chọn cửa hàng cần xin.'}), 400
+    if to_store == from_store:
+        return jsonify({'error': 'Không thể tự xin luân chuyển từ chính cửa hàng của mình.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+
+    if to_store not in _valid_store_codes(cursor):
+        cursor.close()
+        return jsonify({'error': 'Cửa hàng cần xin không hợp lệ.'}), 400
+
+    new_id = _create_transfer_request(cursor, from_store, to_store, note, session['user'], items)
+    db.commit()
+    cursor.close()
+
+    return jsonify({'success': True, 'id': new_id, 'item_count': len(items)})
+
+
+@app.route('/api/transfer/import-excel', methods=['POST'])
+def transfer_import_excel():
+    """Cửa hàng tạo 1 phiếu xin luân chuyển bằng cách IMPORT danh sách mã
+    hàng + số lượng từ 1 file Excel (thay vì gõ tay từng dòng) - tiện cho
+    trường hợp cần xin nhiều mã hàng cùng lúc từ 1 cửa hàng."""
+    if 'user' not in session or session['role'] != 'store':
+        return jsonify({'error': 'Chỉ tài khoản cửa hàng mới được tạo yêu cầu luân chuyển.'}), 403
+
+    from_store = session['store_code']
+    to_store = (request.form.get('to_store') or '').strip().upper()
+    note = (request.form.get('note') or '').strip() or None
+    excel_file = request.files.get('file')
+
+    if not excel_file:
+        return jsonify({'error': 'Vui lòng chọn file Excel danh sách mã hàng cần xin.'}), 400
+    if not to_store:
+        return jsonify({'error': 'Vui lòng chọn cửa hàng cần xin.'}), 400
+    if to_store == from_store:
+        return jsonify({'error': 'Không thể tự xin luân chuyển từ chính cửa hàng của mình.'}), 400
+
+    try:
+        df = read_any(excel_file)
+    except Exception as e:
+        return jsonify({'error': f'Không đọc được file Excel: {e}'}), 400
+
+    part_col = find_col(df.columns, ['mã phụ tùng', 'mã hàng', 'part code', 'part#', 'part #', 'part number', 'part'])
+    qty_col = find_col(df.columns, ['số lượng yêu cầu', 'số lượng', 'sl', 'quantity'])
+    name_col = find_col(df.columns, ['tên hàng', 'tên phụ tùng', 'part name', 'description', 'tên'])
+
+    if not part_col or not qty_col:
+        return jsonify({'error': 'Không tìm thấy cột "Mã hàng"/"Mã phụ tùng" và "Số lượng" trong file. Vui lòng kiểm tra lại file Excel.'}), 400
+
+    raw_items = []
+    skipped = 0
+    for _, r in df.iterrows():
+        part_code = str(r.get(part_col, '') or '').strip()
+        if not part_code or part_code.lower() == 'nan':
+            continue
+        try:
+            qty = float(r.get(qty_col))
+            if math.isnan(qty):
+                raise ValueError()
+        except (TypeError, ValueError):
+            skipped += 1
+            continue
+        if qty <= 0:
+            skipped += 1
+            continue
+        part_name = str(r.get(name_col, '') or '').strip() if name_col else ''
+        if part_name.lower() == 'nan':
+            part_name = ''
+        raw_items.append({'part_code': part_code, 'part_name': part_name, 'quantity': qty})
+
+    items, err = _clean_transfer_items(raw_items)
+    if err:
+        return jsonify({'error': f'File không có dòng dữ liệu hợp lệ nào. {err}'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+
+    if to_store not in _valid_store_codes(cursor):
+        cursor.close()
+        return jsonify({'error': 'Cửa hàng cần xin không hợp lệ.'}), 400
+
+    new_id = _create_transfer_request(cursor, from_store, to_store, note, session['user'], items)
+    db.commit()
+    cursor.close()
+
+    return jsonify({'success': True, 'id': new_id, 'item_count': len(items), 'skipped_rows': skipped})
+
+
+@app.route('/api/transfer/respond', methods=['POST'])
+def transfer_respond():
+    """Cửa hàng được xin (to_store) phản hồi CẢ PHIẾU (mọi mã hàng trong
+    phiếu): Đồng ý hoặc Từ chối (kèm lý do). Không còn bước "Đã soạn/Chưa
+    soạn" trung gian - đồng ý là đồng ý ngay."""
+    if 'user' not in session or session['role'] != 'store':
+        return jsonify({'error': 'Chỉ tài khoản cửa hàng mới được phản hồi yêu cầu.'}), 403
+
+    data = request.json or {}
+    req_id = data.get('id')
+    action = data.get('action')
+    reason = (data.get('reason') or '').strip()
+
+    if not req_id or action not in ('approve', 'reject'):
+        return jsonify({'error': 'Dữ liệu không hợp lệ.'}), 400
+    if action == 'reject' and not reason:
+        return jsonify({'error': 'Vui lòng nhập lý do từ chối.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('SELECT * FROM transfer_requests WHERE id = %s', (req_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        cursor.close()
+        return jsonify({'error': 'Không tìm thấy yêu cầu.'}), 404
+    if row['to_store'] != session['store_code']:
+        cursor.close()
+        return jsonify({'error': 'Bạn không có quyền xử lý yêu cầu này.'}), 403
+    if row['status'] not in ('pending', 'approved', 'rejected'):
+        cursor.close()
+        return jsonify({'error': 'Yêu cầu này không còn ở trạng thái có thể xử lý.'}), 400
+
+    now = vn_now()
+    if action == 'approve':
+        cursor.execute('''
+            UPDATE transfer_requests
+            SET status = 'approved', reject_reason = NULL,
+                responded_by = %s, responded_at = %s, updated_at = %s
+            WHERE id = %s
+        ''', (session['user'], now, now, req_id))
+    else:
+        cursor.execute('''
+            UPDATE transfer_requests
+            SET status = 'rejected', reject_reason = %s,
+                responded_by = %s, responded_at = %s, updated_at = %s
+            WHERE id = %s
+        ''', (reason, session['user'], now, now, req_id))
+
+    db.commit()
+    cursor.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/transfer/revert', methods=['POST'])
+def transfer_revert():
+    """Cửa hàng được xin (to_store) ĐỔI LẠI lựa chọn đã đồng ý/từ chối
+    trước đó, đưa phiếu về trạng thái "Chờ Xử Lý" để chọn lại. Chỉ cho phép
+    khi CHƯA có mã hàng nào trong phiếu được đánh dấu đã nhận hàng (nếu
+    hàng đã nhận thực tế rồi thì không thể đổi ý được nữa)."""
+    if 'user' not in session or session['role'] != 'store':
+        return jsonify({'error': 'Chỉ tài khoản cửa hàng mới được thao tác.'}), 403
+
+    data = request.json or {}
+    req_id = data.get('id')
+    if not req_id:
+        return jsonify({'error': 'Dữ liệu không hợp lệ.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('SELECT * FROM transfer_requests WHERE id = %s', (req_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        cursor.close()
+        return jsonify({'error': 'Không tìm thấy yêu cầu.'}), 404
+    if row['to_store'] != session['store_code']:
+        cursor.close()
+        return jsonify({'error': 'Bạn không có quyền thao tác yêu cầu này.'}), 403
+    if row['status'] not in ('approved', 'rejected'):
+        cursor.close()
+        return jsonify({'error': 'Chỉ có thể đổi lại lựa chọn cho yêu cầu đã đồng ý hoặc đã từ chối.'}), 400
+
+    cursor.execute('SELECT COUNT(*) AS c FROM transfer_items WHERE request_id = %s AND received = TRUE', (req_id,))
+    if cursor.fetchone()['c'] > 0:
+        cursor.close()
+        return jsonify({'error': 'Cửa hàng xin đã nhận một phần hàng của phiếu này, không thể đổi lại lựa chọn nữa.'}), 400
+
+    now = vn_now()
+    cursor.execute('''
+        UPDATE transfer_requests
+        SET status = 'pending', reject_reason = NULL, responded_by = NULL, responded_at = NULL, updated_at = %s
+        WHERE id = %s
+    ''', (now, req_id))
+    db.commit()
+    cursor.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/transfer/mark-received', methods=['POST'])
+def transfer_mark_received():
+    """Cửa hàng đã gửi yêu cầu (from_store) tick "Đã nhận hàng" cho 1 mã
+    hàng cụ thể trong phiếu đã được đồng ý. Khi tick, ghi chú tô màu tồn
+    kho (đỏ/xanh lá) của đúng mã hàng đó ở cả 2 cửa hàng sẽ tự biến mất."""
+    if 'user' not in session or session['role'] != 'store':
+        return jsonify({'error': 'Chỉ tài khoản cửa hàng mới được thao tác.'}), 403
+
+    data = request.json or {}
+    item_id = data.get('item_id')
+    received = data.get('received', True)
+    if not item_id:
+        return jsonify({'error': 'Dữ liệu không hợp lệ.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('''
+        SELECT ti.*, tr.from_store, tr.status AS request_status
+        FROM transfer_items ti JOIN transfer_requests tr ON tr.id = ti.request_id
+        WHERE ti.id = %s
+    ''', (item_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        cursor.close()
+        return jsonify({'error': 'Không tìm thấy mã hàng trong phiếu.'}), 404
+    if row['from_store'] != session['store_code']:
+        cursor.close()
+        return jsonify({'error': 'Bạn không có quyền thao tác mã hàng này.'}), 403
+    if row['request_status'] != 'approved':
+        cursor.close()
+        return jsonify({'error': 'Chỉ có thể đánh dấu nhận hàng cho phiếu đã được đồng ý.'}), 400
+
+    now = vn_now()
+    cursor.execute(
+        'UPDATE transfer_items SET received = %s, received_at = %s WHERE id = %s',
+        (bool(received), now if received else None, item_id)
+    )
+    # Cũng cập nhật updated_at của phiếu cha để cơ chế poll-version (dựa
+    # trên MAX(updated_at) của transfer_requests) phát hiện được thay đổi.
+    cursor.execute('UPDATE transfer_requests SET updated_at = %s WHERE id = %s', (now, row['request_id']))
+    db.commit()
+    cursor.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/transfer/cancel', methods=['POST'])
+def transfer_cancel():
+    """Cửa hàng đã gửi (from_store) tự huỷ yêu cầu của mình khi còn đang chờ xử lý."""
+    if 'user' not in session or session['role'] != 'store':
+        return jsonify({'error': 'Chỉ tài khoản cửa hàng mới được huỷ yêu cầu.'}), 403
+
+    data = request.json or {}
+    req_id = data.get('id')
+    if not req_id:
+        return jsonify({'error': 'Dữ liệu không hợp lệ.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('SELECT * FROM transfer_requests WHERE id = %s', (req_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        cursor.close()
+        return jsonify({'error': 'Không tìm thấy yêu cầu.'}), 404
+    if row['from_store'] != session['store_code']:
+        cursor.close()
+        return jsonify({'error': 'Bạn không có quyền huỷ yêu cầu này.'}), 403
+    if row['status'] != 'pending':
+        cursor.close()
+        return jsonify({'error': 'Chỉ có thể huỷ yêu cầu đang chờ xử lý.'}), 400
+
+    cursor.execute("UPDATE transfer_requests SET status = 'cancelled', updated_at = %s WHERE id = %s", (vn_now(), req_id))
+    db.commit()
+    cursor.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/transfer/highlights', methods=['GET'])
+def transfer_highlights():
+    """Trả về dữ liệu để tô màu bảng Tồn Kho Hệ Thống theo các phiếu luân
+    chuyển ĐÃ ĐỒNG Ý nhưng CHƯA nhận hàng xong:
+      - 'given': ở cửa hàng CHO (to_store) - cột tồn kho của mã hàng đó tại
+        cửa hàng này sẽ tô ĐỎ, kèm danh sách "cửa hàng nào xin bao nhiêu".
+      - 'receiving': ở cửa hàng XIN (from_store) - cột tồn kho của mã hàng
+        đó tại cửa hàng này sẽ tô XANH LÁ, kèm "đang nhận từ cửa hàng nào,
+        số lượng bao nhiêu".
+    Khi 1 dòng mã hàng được tick "Đã nhận hàng" (received = TRUE) thì dòng
+    đó không còn xuất hiện trong dữ liệu trả về nữa -> ghi chú màu tự mất."""
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('''
+        SELECT tr.from_store, tr.to_store, ti.part_code, ti.quantity
+        FROM transfer_items ti
+        JOIN transfer_requests tr ON tr.id = ti.request_id
+        WHERE tr.status = 'approved' AND ti.received = FALSE
+    ''')
+    rows = cursor.fetchall()
+    cursor.close()
+
+    given = {}      # given[part_code][to_store] = [{store, quantity}, ...]  (tô đỏ ở to_store)
+    receiving = {}  # receiving[part_code][from_store] = [{store, quantity}, ...]  (tô xanh ở from_store)
+
+    for r in rows:
+        part_code = r['part_code']
+        qty = float(r['quantity']) if r['quantity'] is not None else 0
+        given.setdefault(part_code, {}).setdefault(r['to_store'], []).append(
+            {'store': r['from_store'], 'quantity': qty}
+        )
+        receiving.setdefault(part_code, {}).setdefault(r['from_store'], []).append(
+            {'store': r['to_store'], 'quantity': qty}
+        )
+
+    return jsonify({'success': True, 'given': given, 'receiving': receiving})
 
 
 if __name__ == '__main__':

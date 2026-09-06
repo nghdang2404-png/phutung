@@ -81,6 +81,8 @@
     .badge-shipping { background-color: #fff8c5; color: #9a6700; border: 1px solid rgba(154,103,0,0.2); }
     .badge-received { background-color: #dafbe1; color: #1a7f37; border: 1px solid rgba(26,127,55,0.2); }
     .badge-order-type { padding: 4px 9px; font-weight: 600; border-radius: 14px; font-size: 0.74rem; white-space: nowrap; background-color: #eef2ff; color: #4338ca; border: 1px solid rgba(67,56,202,0.18); }
+    .badge-prepared { background-color: #dafbe1; color: #1a7f37; border: 1px solid rgba(26,127,55,0.2); }
+    .badge-not-prepared { background-color: #e8eaed; color: #495057; border: 1px solid rgba(73,80,87,0.2); }
     
     .table-responsive { max-height: 550px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
     .table thead th { 
@@ -99,6 +101,15 @@
     
     #loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); backdrop-filter: blur(4px); z-index: 9999; align-items: center; justify-content: center; flex-direction: column; }
 
+    /* Ô tồn kho có ghi chú luân chuyển (tô đỏ/xanh lá) - click/tap để xem ghi chú */
+    .inv-hl { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+    #inv-tooltip {
+        display: none; position: fixed; z-index: 10000; max-width: 260px;
+        background: #1f2937; color: #fff; padding: 8px 12px; border-radius: 8px;
+        font-size: 0.8rem; line-height: 1.5; white-space: pre-line;
+        box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+    }
+
     @media (max-width: 768px) {
         .brand-banner { padding: 1rem; }
         .brand-banner h4 { font-size: 1.1rem; }
@@ -116,6 +127,10 @@
     <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
     <h5 class="fw-bold text-dark text-center px-3">Đang xử lý...</h5>
 </div>
+
+<!-- Ghi chú tô màu tồn kho (ai xin bao nhiêu / đang nhận từ đâu) - hiện khi
+     click/tap vào ô tồn kho đỏ hoặc xanh lá, ẩn khi click ra ngoài. -->
+<div id="inv-tooltip"></div>
 
 <div class="container-fluid px-2 px-md-4 py-3 py-md-4" style="max-width: 1400px;">
     
@@ -166,9 +181,15 @@
                 <i class="bi bi-clock-history me-2"></i>Lịch Sử Tải Lên
             </button>
         </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="transfer-tab" data-bs-toggle="pill" data-bs-target="#transfer-pane" onclick="loadTransfers()">
+                <i class="bi bi-arrow-left-right me-2"></i>Luân Chuyển Nội Bộ
+                <span class="badge bg-danger rounded-pill ms-1" id="transfer-badge" style="display:none;">0</span>
+            </button>
+        </li>
         {% if role == 'admin' %}
         <li class="nav-item" role="presentation">
-            <button class="nav-link" id="admin-tab" data-bs-toggle="pill" data-bs-target="#admin-pane" onclick="loadAdminUsers()">
+            <button class="nav-link" id="admin-tab" data-bs-toggle="pill" data-bs-target="#admin-pane" onclick="loadAdminUsers(); loadDbSize();">
                 <i class="bi bi-gear-fill me-2"></i>Quản Lý User
             </button>
         </li>
@@ -473,10 +494,155 @@
             </div>
         </div>
 
+        <!-- TRANSFER PANE (Luân Chuyển Nội Bộ) -->
+        <div class="tab-pane fade" id="transfer-pane">
+
+            {% if role == 'store' %}
+            <div class="card card-custom p-3 p-md-4 mb-3 mb-md-4">
+                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-send-plus-fill me-2 text-primary"></i>Tạo Phiếu Xin Luân Chuyển Mới</h5>
+                <div class="row g-2 g-md-3">
+                    <div class="col-12 col-md-6">
+                        <label class="form-label fw-semibold small mb-1 text-secondary">Xin từ cửa hàng:</label>
+                        <select id="transfer-to-store" class="form-select border-primary-subtle">
+                            <option value="">-- Chọn cửa hàng --</option>
+                            {% for s in ['NS1', 'NS2', 'NS3', 'NS4', 'NS5', 'NSM1'] %}
+                            {% if s != store_code %}
+                            <option value="{{ s }}">Cửa hàng {{ s }}</option>
+                            {% endif %}
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <label class="form-label fw-semibold small mb-1 text-secondary">Ghi chú (không bắt buộc):</label>
+                        <input type="text" id="transfer-note" class="form-control" placeholder="Ví dụ: cần gấp cho khách hẹn chiều nay...">
+                    </div>
+                </div>
+
+                <hr class="my-3">
+                <label class="form-label fw-semibold small mb-2 text-secondary">Danh sách mã hàng cần xin (1 phiếu có thể chứa nhiều mã hàng):</label>
+                <div id="transfer-item-rows"></div>
+                <button type="button" class="btn btn-outline-primary btn-sm mt-1" onclick="addTransferItemRow()">
+                    <i class="bi bi-plus-lg me-1"></i>Thêm Mã Hàng
+                </button>
+                <datalist id="transfer-part-list"></datalist>
+
+                <div class="mt-3 d-flex flex-column flex-md-row justify-content-between align-items-stretch align-items-md-center gap-2">
+                    <button type="button" class="btn btn-outline-secondary fw-semibold" onclick="document.getElementById('transfer-excel-file').click()">
+                        <i class="bi bi-file-earmark-excel me-2"></i>Nhập Danh Sách Từ Excel
+                    </button>
+                    <input type="file" id="transfer-excel-file" accept=".xlsx, .xls, .csv" style="display:none;" onchange="submitTransferExcelImport()">
+                    <button type="button" class="btn btn-primary fw-semibold px-4" onclick="submitTransferRequest()">
+                        <i class="bi bi-send-fill me-2"></i>Gửi Phiếu
+                    </button>
+                </div>
+                <p class="text-muted small mt-2 mb-0"><i class="bi bi-exclamation-circle me-1"></i>File Excel cần có cột "Mã hàng" (hoặc "Mã phụ tùng") và "Số lượng". Nhập từ Excel sẽ gửi phiếu ngay với đúng cửa hàng/ghi chú đã chọn ở trên, không dùng chung các dòng đã nhập tay ở trên.</p>
+            </div>
+            {% endif %}
+
+            {% if role == 'admin' %}
+            <div class="card card-custom p-3 mb-3 mb-md-4">
+                <div class="row align-items-center">
+                    <div class="col-12 col-md-4">
+                        <label class="form-label fw-semibold small mb-1 text-secondary">Lọc Theo Cửa Hàng:</label>
+                        <select id="transfer-admin-store-filter" class="form-select border-primary-subtle" onchange="loadTransfers()">
+                            <option value="ALL">🌐 Tất Cả Cửa Hàng</option>
+                            <option value="NS1">Cửa hàng NS1</option>
+                            <option value="NS2">Cửa hàng NS2</option>
+                            <option value="NS3">Cửa hàng NS3</option>
+                            <option value="NS4">Cửa hàng NS4</option>
+                            <option value="NS5">Cửa hàng NS5</option>
+                            <option value="NSM1">Cửa hàng NSM1</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card card-custom p-3 p-md-4">
+                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-arrow-left-right me-2 text-primary"></i>Toàn Bộ Phiếu Luân Chuyển Nội Bộ</h5>
+                <div class="table-responsive border rounded-3">
+                    <table class="table table-hover align-middle mb-0 text-nowrap">
+                        <thead>
+                            <tr>
+                                <th class="text-center">ID</th>
+                                <th>Từ Cửa Hàng</th>
+                                <th>Đến Cửa Hàng</th>
+                                <th>Mã Hàng (SL)</th>
+                                <th>Trạng Thái</th>
+                                <th>Ghi Chú / Lý Do</th>
+                                <th>Thời Gian Gửi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transfer-admin-body">
+                            <tr><td colspan="7" class="text-center py-4 text-muted">Đang tải dữ liệu...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if role == 'store' %}
+            <div class="card card-custom p-3 p-md-4 mb-3 mb-md-4">
+                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-inbox-fill me-2 text-warning"></i>Phiếu Cửa Hàng Khác Gửi Đến (Cần Xử Lý)</h5>
+                <div class="table-responsive border rounded-3">
+                    <table class="table table-hover align-middle mb-0 text-nowrap">
+                        <thead>
+                            <tr>
+                                <th>Cửa Hàng Xin</th>
+                                <th>Mã Hàng (SL)</th>
+                                <th>Ghi Chú</th>
+                                <th>Trạng Thái</th>
+                                <th>Thời Gian Gửi</th>
+                                <th class="text-end">Thao Tác</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transfer-received-body">
+                            <tr><td colspan="6" class="text-center py-4 text-muted">Đang tải dữ liệu...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card card-custom p-3 p-md-4">
+                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-send-fill me-2 text-primary"></i>Phiếu Tôi Đã Gửi</h5>
+                <div class="table-responsive border rounded-3">
+                    <table class="table table-hover align-middle mb-0 text-nowrap">
+                        <thead>
+                            <tr>
+                                <th>Xin Từ Cửa Hàng</th>
+                                <th>Mã Hàng (SL)</th>
+                                <th>Trạng Thái</th>
+                                <th>Đã Nhận</th>
+                                <th>Ghi Chú / Lý Do</th>
+                                <th>Thời Gian Gửi</th>
+                                <th class="text-end">Thao Tác</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transfer-sent-body">
+                            <tr><td colspan="7" class="text-center py-4 text-muted">Đang tải dữ liệu...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
         {% if role == 'admin' %}
         <!-- ADMIN PANE -->
         <div class="tab-pane fade" id="admin-pane">
             <div class="card card-custom p-3 p-md-4">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5 class="fw-bold mb-0 fs-6 fs-md-5"><i class="bi bi-hdd-fill me-2 text-primary"></i>Dung Lượng Database</h5>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="loadDbSize()">
+                        <i class="bi bi-arrow-clockwise me-1"></i> Làm mới
+                    </button>
+                </div>
+                <p id="db-size-summary" class="text-muted small mb-2">Đang tải...</p>
+                <div class="progress" style="height: 22px;">
+                    <div id="db-size-bar" class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+                </div>
+            </div>
+
+            <div class="card card-custom p-3 p-md-4 mt-3 mt-md-4">
                 <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-people-fill me-2 text-primary"></i>Quản Lý Tài Khoản & Mật Khẩu User</h5>
                 <div class="table-responsive border rounded-3">
                     <table class="table table-hover align-middle mb-0">
@@ -565,6 +731,27 @@
     </div>
 </div>
 
+<!-- Modal Từ Chối Phiếu Luân Chuyển -->
+<div class="modal fade" id="transferRejectModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title fw-bold fs-6"><i class="bi bi-x-circle-fill me-2"></i>Từ Chối Phiếu Luân Chuyển</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-3 p-md-4">
+                <input type="hidden" id="transfer-reject-id">
+                <p class="mb-2 small text-muted" id="transfer-reject-summary"></p>
+                <label class="form-label fw-semibold small">Lý do từ chối:</label>
+                <textarea id="transfer-reject-reason" class="form-control mb-3" rows="3" placeholder="Nhập lý do không thể cho mã hàng này..."></textarea>
+                <button type="button" class="btn btn-danger w-100 fw-semibold" onclick="submitTransferReject()">
+                    <i class="bi bi-x-lg me-1"></i>Xác Nhận Từ Chối
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
     let globalData = [];
     let filteredData = [];   // globalData sau khi áp bộ lọc/tìm kiếm hiện tại
@@ -575,6 +762,7 @@
 
     document.addEventListener("DOMContentLoaded", () => {
         loadData();
+        loadTransfers(); // tải sớm để hiển thị số lượng badge yêu cầu đang chờ
         setupDragZones();
         startVersionPolling();
     });
@@ -771,14 +959,27 @@
     }
 
     let globalInventory = [];
+    // Dữ liệu tô màu tồn kho theo các phiếu luân chuyển ĐÃ ĐỒNG Ý nhưng
+    // CHƯA nhận hàng xong - xem /api/transfer/highlights. Cấu trúc:
+    //   given[part_code][store_code]     = [{store, quantity}, ...]  (tô ĐỎ - cửa hàng đang bị xin)
+    //   receiving[part_code][store_code] = [{store, quantity}, ...]  (tô XANH LÁ - cửa hàng đang xin)
+    let transferHighlights = { given: {}, receiving: {} };
 
     async function loadInventory() {
         try {
-            const res = await fetch('/api/inventory');
+            const [res, hlRes] = await Promise.all([
+                fetch('/api/inventory'),
+                fetch('/api/transfer/highlights'),
+            ]);
             const result = await res.json();
+            const hlResult = await hlRes.json();
+            if (hlResult.success) {
+                transferHighlights = { given: hlResult.given || {}, receiving: hlResult.receiving || {} };
+            }
             if (result.success) {
                 globalInventory = result.data;
                 filterInventory(); // áp lại từ khoá tìm kiếm hiện tại (nếu có)
+                populateTransferPartList();
                 const metaEl = document.getElementById('inventory-meta');
                 if (result.meta && result.meta.upload_time) {
                     metaEl.innerText = `Cập nhật lần cuối: ${result.meta.upload_time} bởi ${result.meta.uploaded_by} · ${result.meta.total_parts.toLocaleString()} mã hàng`;
@@ -788,6 +989,71 @@
             }
         } catch (e) { console.error(e); }
     }
+
+    // Chỉ tải lại phần tô màu (nhẹ hơn nhiều so với tải lại toàn bộ tồn kho)
+    // - gọi sau mỗi thao tác luân chuyển (đồng ý/từ chối/đổi lại/tick nhận
+    // hàng) để bảng tồn kho luôn phản ánh đúng ngay, không cần load lại trang.
+    async function refreshTransferHighlights() {
+        try {
+            const res = await fetch('/api/transfer/highlights');
+            const result = await res.json();
+            if (result.success) {
+                transferHighlights = { given: result.given || {}, receiving: result.receiving || {} };
+                filterInventory(); // vẽ lại bảng tồn kho đang hiển thị với màu mới
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    // Ghi chú tô màu tồn kho: hiện khi click/tap vào ô có class "inv-hl" (cả
+    // desktop lẫn mobile - không phụ thuộc hover chuột), ẩn khi click ra
+    // ngoài hoặc click lại đúng ô đang mở. Dùng UỶ QUYỀN SỰ KIỆN (event
+    // delegation) trên toàn document vì các ô này được vẽ lại liên tục mỗi
+    // khi lọc/tải lại bảng tồn kho.
+    function hideInvTooltip() {
+        const tip = document.getElementById('inv-tooltip');
+        tip.style.display = 'none';
+        tip.dataset.openFor = '';
+    }
+
+    function showInvTooltip(cell, text) {
+        const tip = document.getElementById('inv-tooltip');
+        tip.innerText = text;
+        tip.style.display = 'block';
+
+        const rect = cell.getBoundingClientRect();
+        // Đo kích thước tooltip SAU khi đã hiển thị nội dung + display:block
+        const tipW = tip.offsetWidth;
+        const tipH = tip.offsetHeight;
+        const margin = 8;
+
+        let top = rect.top - tipH - margin;
+        if (top < margin) top = rect.bottom + margin; // không đủ chỗ phía trên -> hiện phía dưới
+
+        let left = rect.left + rect.width / 2 - tipW / 2;
+        left = Math.max(margin, Math.min(left, window.innerWidth - tipW - margin));
+
+        tip.style.top = top + 'px';
+        tip.style.left = left + 'px';
+    }
+
+    document.addEventListener('click', (e) => {
+        const cell = e.target.closest('.inv-hl');
+        const tip = document.getElementById('inv-tooltip');
+        if (cell) {
+            e.stopPropagation();
+            const text = cell.getAttribute('data-tip') || '';
+            if (tip.dataset.openFor === text && tip.style.display === 'block') {
+                hideInvTooltip(); // click lại đúng ô đang mở -> ẩn đi
+            } else {
+                showInvTooltip(cell, text);
+                tip.dataset.openFor = text;
+            }
+        } else if (!e.target.closest('#inv-tooltip')) {
+            hideInvTooltip();
+        }
+    });
+    // Ẩn ghi chú khi cuộn trang (vị trí "fixed" sẽ không còn đúng chỗ ô nữa).
+    window.addEventListener('scroll', hideInvTooltip, true);
 
     // Chỉ vẽ tối đa RENDER_LIMIT dòng ra DOM mỗi lần, dù kết quả lọc khớp nhiều hơn.
     // Lý do: với 10.000+ mã hàng, gõ vài ký tự đầu vẫn khớp hàng nghìn dòng - build
@@ -807,18 +1073,35 @@
         const fmt = (v) => (v && v !== 0) ? v.toLocaleString() : '-';
         const truncated = data.length > INVENTORY_RENDER_LIMIT;
         const displayData = truncated ? data.slice(0, INVENTORY_RENDER_LIMIT) : data;
+        const STORES = ['NS1', 'NS2', 'NS3', 'NS4', 'NS5', 'NSM1'];
+
+        // Tô ĐỎ cột tồn kho của cửa hàng đang bị xin (kèm ghi chú "cửa hàng
+        // nào xin bao nhiêu"), tô XANH LÁ cột tồn kho của cửa hàng đang xin
+        // (kèm ghi chú "đang nhận từ cửa hàng nào, bao nhiêu"). Dữ liệu này
+        // tự biến mất khi mã hàng được tick "Đã nhận hàng" (xem transferHighlights).
+        // Dùng data-tip + click/tap (thay vì title/hover) để xem được cả trên
+        // điện thoại - không cần rê chuột.
+        const invCell = (item, store) => {
+            const val = fmt(item[store]);
+            const given = (transferHighlights.given[item.part_code] || {})[store];
+            const receiving = (transferHighlights.receiving[item.part_code] || {})[store];
+            if (given && given.length) {
+                const tip = given.map(g => `${g.store} xin ${g.quantity.toLocaleString()}`).join('\n');
+                return `<td class="text-end text-danger fw-bold inv-hl" data-tip="${escapeHtmlAttr(tip)}">${val}</td>`;
+            }
+            if (receiving && receiving.length) {
+                const tip = receiving.map(g => `Nhận ${g.store} ${g.quantity.toLocaleString()}`).join('\n');
+                return `<td class="text-end text-success fw-bold inv-hl" data-tip="${escapeHtmlAttr(tip)}">${val}</td>`;
+            }
+            return `<td class="text-end">${val}</td>`;
+        };
 
         let html = displayData.map(item => `
             <tr>
                 <td><span class="part-code">${item.part_code}</span></td>
                 <td>${item.part_name || ''}</td>
                 <td class="text-muted small">${item.unit || ''}</td>
-                <td class="text-end">${fmt(item.NS1)}</td>
-                <td class="text-end">${fmt(item.NS2)}</td>
-                <td class="text-end">${fmt(item.NS3)}</td>
-                <td class="text-end">${fmt(item.NS4)}</td>
-                <td class="text-end">${fmt(item.NS5)}</td>
-                <td class="text-end">${fmt(item.NSM1)}</td>
+                ${STORES.map(s => invCell(item, s)).join('')}
             </tr>
         `).join('');
 
@@ -895,6 +1178,385 @@
             `).join('');
         } else {
             tbody.innerHTML = `<tr><td colspan="6" class="text-center py-4 text-muted">Chưa có lịch sử tải lên.</td></tr>`;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // LUÂN CHUYỂN NỘI BỘ GIỮA CÁC CỬA HÀNG (1 phiếu có thể chứa nhiều mã hàng)
+    // ------------------------------------------------------------------
+    const TRANSFER_STATUS_LABELS = {
+        pending: '<span class="badge-status badge-shipping">Chờ Xử Lý</span>',
+        approved: '<span class="badge-status badge-prepared">Đã Đồng Ý</span>',
+        rejected: '<span class="badge-status badge-debt">Đã Từ Chối</span>',
+        cancelled: '<span class="badge-status badge-not-prepared">Đã Huỷ</span>',
+    };
+
+    function transferStatusBadge(item) {
+        let html = TRANSFER_STATUS_LABELS[item.status] || item.status;
+        if (item.status === 'approved' && item.all_received) {
+            html += ' <span class="badge-status badge-received">Đã Nhận Đủ Hàng</span>';
+        }
+        return html;
+    }
+
+    function escapeHtmlAttr(s) {
+        return String(s == null ? '' : s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function transferItemsSummary(items) {
+        if (!items || !items.length) return '';
+        return items.map(it => `${escapeHtmlAttr(it.part_code)} <span class="text-muted">x ${Number(it.quantity || 0).toLocaleString()}</span>`).join('<br>');
+    }
+
+    // ---- Xây dựng các dòng nhập mã hàng (nhập tay) trong form tạo phiếu ----
+    let transferRowSeq = 0;
+
+    function addTransferItemRow(partCode, quantity) {
+        const wrap = document.getElementById('transfer-item-rows');
+        if (!wrap) return;
+        const rid = ++transferRowSeq;
+        const row = document.createElement('div');
+        row.className = 'row g-2 align-items-center mb-2';
+        row.id = `transfer-row-${rid}`;
+        row.innerHTML = `
+            <div class="col-7 col-md-6">
+                <input list="transfer-part-list" class="form-control transfer-row-part" placeholder="Nhập hoặc chọn mã hàng..." value="${escapeHtmlAttr(partCode || '')}" oninput="onTransferRowPartChange(${rid})">
+                <div class="small text-muted mt-1 transfer-row-hint"></div>
+            </div>
+            <div class="col-3 col-md-3">
+                <input type="number" class="form-control transfer-row-qty" min="1" step="1" placeholder="SL" value="${quantity || ''}">
+            </div>
+            <div class="col-2 col-md-3 text-end">
+                <button type="button" class="btn btn-outline-danger btn-sm" onclick="document.getElementById('transfer-row-${rid}').remove()"><i class="bi bi-trash3"></i></button>
+            </div>
+        `;
+        wrap.appendChild(row);
+    }
+
+    function onTransferRowPartChange(rid) {
+        const row = document.getElementById(`transfer-row-${rid}`);
+        if (!row) return;
+        const code = row.querySelector('.transfer-row-part').value.trim().toLowerCase();
+        const hintEl = row.querySelector('.transfer-row-hint');
+        const toStore = document.getElementById('transfer-to-store').value;
+        if (!code) { hintEl.innerText = ''; return; }
+        const found = globalInventory.find(it => (it.part_code || '').toLowerCase() === code);
+        if (!found) { hintEl.innerText = ''; return; }
+        let text = found.part_name ? `Tên hàng: ${found.part_name}` : '';
+        if (toStore && found[toStore] !== undefined && found[toStore] !== null) {
+            text += (text ? ' · ' : '') + `Tồn tại ${toStore}: ${(found[toStore] || 0).toLocaleString()}`;
+        }
+        hintEl.innerText = text;
+    }
+
+    function populateTransferPartList() {
+        const list = document.getElementById('transfer-part-list');
+        if (!list) return;
+        list.innerHTML = globalInventory.slice(0, 3000).map(it =>
+            `<option value="${escapeHtmlAttr(it.part_code)}">${escapeHtmlAttr(it.part_name || '')}</option>`
+        ).join('');
+    }
+
+    function findInventoryPartName(partCode) {
+        const found = globalInventory.find(it => (it.part_code || '').toLowerCase() === (partCode || '').toLowerCase());
+        return found ? (found.part_name || '') : '';
+    }
+
+    function collectTransferItemRows() {
+        const rows = Array.from(document.querySelectorAll('#transfer-item-rows > div'));
+        const items = [];
+        for (const row of rows) {
+            const partCode = row.querySelector('.transfer-row-part').value.trim();
+            const qty = row.querySelector('.transfer-row-qty').value;
+            if (!partCode && !qty) continue; // dòng trống, bỏ qua
+            items.push({ part_code: partCode, part_name: findInventoryPartName(partCode), quantity: qty });
+        }
+        return items;
+    }
+
+    async function submitTransferRequest() {
+        const toStore = document.getElementById('transfer-to-store').value;
+        const note = document.getElementById('transfer-note').value.trim();
+        const items = collectTransferItemRows();
+
+        if (!toStore) { alert('Vui lòng chọn cửa hàng cần xin.'); return; }
+        if (items.length === 0) { alert('Vui lòng thêm ít nhất 1 mã hàng cần xin.'); return; }
+        for (const it of items) {
+            if (!it.part_code) { alert('Vui lòng nhập đầy đủ mã hàng cho mọi dòng.'); return; }
+            if (!it.quantity || Number(it.quantity) <= 0) { alert(`Vui lòng nhập số lượng hợp lệ cho mã hàng "${it.part_code}".`); return; }
+        }
+
+        try {
+            const res = await fetch('/api/transfer/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ to_store: toStore, note: note, items: items })
+            });
+            const result = await res.json();
+            if (res.ok && result.success) {
+                document.getElementById('transfer-to-store').value = '';
+                document.getElementById('transfer-note').value = '';
+                document.getElementById('transfer-item-rows').innerHTML = '';
+                addTransferItemRow();
+                loadTransfers();
+                refreshTransferHighlights();
+            } else {
+                alert('Lỗi: ' + (result.error || 'Không thể gửi phiếu.'));
+            }
+        } catch (e) {
+            console.error(e);
+            alert('Lỗi kết nối đến server.');
+        }
+    }
+
+    async function submitTransferExcelImport() {
+        const fileInput = document.getElementById('transfer-excel-file');
+        const file = fileInput.files[0];
+        if (!file) return;
+        const toStore = document.getElementById('transfer-to-store').value;
+        if (!toStore) {
+            alert('Vui lòng chọn cửa hàng cần xin trước khi nhập từ Excel.');
+            fileInput.value = '';
+            return;
+        }
+        const note = document.getElementById('transfer-note').value.trim();
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('to_store', toStore);
+        formData.append('note', note);
+
+        document.getElementById('loading-overlay').style.display = 'flex';
+        try {
+            const res = await fetch('/api/transfer/import-excel', { method: 'POST', body: formData });
+            const result = await res.json();
+            if (res.ok && result.success) {
+                let msg = `Đã gửi phiếu với ${result.item_count} mã hàng.`;
+                if (result.skipped_rows) msg += ` (Bỏ qua ${result.skipped_rows} dòng không hợp lệ.)`;
+                alert(msg);
+                document.getElementById('transfer-to-store').value = '';
+                document.getElementById('transfer-note').value = '';
+                loadTransfers();
+                refreshTransferHighlights();
+            } else {
+                alert('Lỗi: ' + (result.error || 'Không thể nhập file Excel.'));
+            }
+        } catch (e) { console.error(e); alert('Lỗi kết nối đến server.'); }
+        finally {
+            document.getElementById('loading-overlay').style.display = 'none';
+            fileInput.value = '';
+        }
+    }
+
+    function renderReceivedItemsChecklist(req) {
+        // Ô tick "Đã nhận hàng" cho từng mã - chỉ hiển thị cho phiếu đã được
+        // đồng ý (approved), đặt ở cột riêng cạnh "Trạng Thái" cho gọn.
+        if (req.status !== 'approved') return '<span class="text-muted small">—</span>';
+        return req.items.map(it => `
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="recv-item-${it.id}" ${it.received ? 'checked' : ''} onchange="toggleItemReceived(${it.id}, this.checked)">
+                <label class="form-check-label small ${it.received ? 'text-success text-decoration-line-through' : ''}" for="recv-item-${it.id}">
+                    ${escapeHtmlAttr(it.part_code)}${it.received ? ' — Đã nhận' : ''}
+                </label>
+            </div>
+        `).join('');
+    }
+
+    async function loadTransfers() {
+        const adminFilter = document.getElementById('transfer-admin-store-filter');
+        const url = adminFilter ? `/api/transfer/list?store=${adminFilter.value}` : '/api/transfer/list';
+
+        try {
+            const res = await fetch(url);
+            const result = await res.json();
+            if (!result.success) return;
+
+            const requests = result.requests;
+            window._lastTransferRequests = requests;
+
+            const sentBody = document.getElementById('transfer-sent-body');
+            const receivedBody = document.getElementById('transfer-received-body');
+            const adminBody = document.getElementById('transfer-admin-body');
+
+            if (sentBody && receivedBody) {
+                const sent = requests.filter(r => r.direction === 'sent');
+                const received = requests.filter(r => r.direction === 'received');
+
+                sentBody.innerHTML = sent.length ? sent.map(r => `
+                    <tr>
+                        <td><span class="badge bg-secondary">${r.to_store}</span></td>
+                        <td>${transferItemsSummary(r.items)}</td>
+                        <td>${transferStatusBadge(r)}</td>
+                        <td>${renderReceivedItemsChecklist(r)}</td>
+                        <td class="small">${r.status === 'rejected' ? (r.reject_reason || '') : (r.note || '')}</td>
+                        <td class="text-muted small">${r.created_at || ''}</td>
+                        <td class="text-end">
+                            ${r.status === 'pending' ? `<button class="btn btn-outline-secondary btn-sm" onclick="cancelTransferRequest(${r.id})"><i class="bi bi-x-lg"></i> Huỷ</button>` : ''}
+                        </td>
+                    </tr>
+                `).join('') : `<tr><td colspan="7" class="text-center py-4 text-muted">Bạn chưa gửi phiếu nào.</td></tr>`;
+
+                receivedBody.innerHTML = received.length ? received.map(r => `
+                    <tr>
+                        <td><span class="badge bg-secondary">${r.from_store}</span></td>
+                        <td>${transferItemsSummary(r.items)}</td>
+                        <td class="small">${r.note || ''}</td>
+                        <td>${transferStatusBadge(r)}</td>
+                        <td class="text-muted small">${r.created_at || ''}</td>
+                        <td class="text-end text-nowrap">
+                            ${r.status === 'pending' ? `
+                                <button class="btn btn-success btn-sm me-1" onclick="respondTransfer(${r.id}, 'approve')"><i class="bi bi-check-lg"></i> Đồng Ý</button>
+                                <button class="btn btn-outline-danger btn-sm" onclick="openTransferRejectModal(${r.id})"><i class="bi bi-x-lg"></i> Từ Chối</button>
+                            ` : (r.status === 'approved' || r.status === 'rejected') && !r.any_received ? `
+                                <button class="btn btn-outline-secondary btn-sm" onclick="revertTransfer(${r.id})"><i class="bi bi-arrow-counterclockwise"></i> Đổi Lại</button>
+                            ` : ''}
+                        </td>
+                    </tr>
+                `).join('') : `<tr><td colspan="6" class="text-center py-4 text-muted">Chưa có phiếu nào gửi đến.</td></tr>`;
+
+                const pendingCount = received.filter(r => r.status === 'pending').length;
+                const badge = document.getElementById('transfer-badge');
+                if (badge) {
+                    if (pendingCount > 0) { badge.style.display = 'inline-block'; badge.innerText = pendingCount; }
+                    else { badge.style.display = 'none'; }
+                }
+            }
+
+            if (adminBody) {
+                adminBody.innerHTML = requests.length ? requests.map(r => `
+                    <tr>
+                        <td class="text-center text-muted small">${r.id}</td>
+                        <td><span class="badge bg-secondary">${r.from_store}</span></td>
+                        <td><span class="badge bg-secondary">${r.to_store}</span></td>
+                        <td>${transferItemsSummary(r.items)}</td>
+                        <td>${transferStatusBadge(r)}</td>
+                        <td class="small">${r.status === 'rejected' ? (r.reject_reason || '') : (r.note || '')}</td>
+                        <td class="text-muted small">${r.created_at || ''}</td>
+                    </tr>
+                `).join('') : `<tr><td colspan="7" class="text-center py-4 text-muted">Chưa có phiếu luân chuyển nào.</td></tr>`;
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    async function respondTransfer(id, action) {
+        if (action === 'approve' && !confirm('Xác nhận Đồng Ý toàn bộ mã hàng trong phiếu này?')) return;
+        try {
+            const res = await fetch('/api/transfer/respond', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id: id, action: action })
+            });
+            const result = await res.json();
+            if (res.ok && result.success) {
+                loadTransfers();
+                refreshTransferHighlights();
+            } else {
+                alert('Lỗi: ' + (result.error || 'Không thể xử lý phiếu.'));
+            }
+        } catch (e) { console.error(e); alert('Lỗi kết nối đến server.'); }
+    }
+
+    function openTransferRejectModal(id) {
+        document.getElementById('transfer-reject-id').value = id;
+        const req = (window._lastTransferRequests || []).find(r => r.id === id);
+        document.getElementById('transfer-reject-summary').innerHTML = req ? `Mã hàng: ${transferItemsSummary(req.items)}` : '';
+        document.getElementById('transfer-reject-reason').value = '';
+        new bootstrap.Modal(document.getElementById('transferRejectModal')).show();
+    }
+
+    async function submitTransferReject() {
+        const id = document.getElementById('transfer-reject-id').value;
+        const reason = document.getElementById('transfer-reject-reason').value.trim();
+        if (!reason) { alert('Vui lòng nhập lý do từ chối.'); return; }
+        try {
+            const res = await fetch('/api/transfer/respond', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id: Number(id), action: 'reject', reason: reason })
+            });
+            const result = await res.json();
+            if (res.ok && result.success) {
+                bootstrap.Modal.getInstance(document.getElementById('transferRejectModal'))?.hide();
+                loadTransfers();
+                refreshTransferHighlights();
+            } else {
+                alert('Lỗi: ' + (result.error || 'Không thể xử lý phiếu.'));
+            }
+        } catch (e) { console.error(e); alert('Lỗi kết nối đến server.'); }
+    }
+
+    async function revertTransfer(id) {
+        if (!confirm('Đổi lại lựa chọn và đưa phiếu này về trạng thái Chờ Xử Lý?')) return;
+        try {
+            const res = await fetch('/api/transfer/revert', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id: id })
+            });
+            const result = await res.json();
+            if (res.ok && result.success) {
+                loadTransfers();
+                refreshTransferHighlights();
+            } else {
+                alert('Lỗi: ' + (result.error || 'Không thể đổi lại lựa chọn.'));
+            }
+        } catch (e) { console.error(e); alert('Lỗi kết nối đến server.'); }
+    }
+
+    async function toggleItemReceived(itemId, received) {
+        try {
+            const res = await fetch('/api/transfer/mark-received', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ item_id: itemId, received: received })
+            });
+            const result = await res.json();
+            if (res.ok && result.success) {
+                loadTransfers();
+                refreshTransferHighlights();
+            } else {
+                alert('Lỗi: ' + (result.error || 'Không thể cập nhật.'));
+            }
+        } catch (e) { console.error(e); alert('Lỗi kết nối đến server.'); }
+    }
+
+    async function cancelTransferRequest(id) {
+        if (!confirm('Bạn có chắc muốn huỷ phiếu này?')) return;
+        try {
+            const res = await fetch('/api/transfer/cancel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id: id })
+            });
+            const result = await res.json();
+            if (res.ok && result.success) { loadTransfers(); }
+            else { alert('Lỗi: ' + (result.error || 'Không thể huỷ phiếu.')); }
+        } catch (e) { console.error(e); alert('Lỗi kết nối đến server.'); }
+    }
+
+    async function loadDbSize() {
+        const summaryEl = document.getElementById('db-size-summary');
+        const barEl = document.getElementById('db-size-bar');
+        summaryEl.innerText = 'Đang tải...';
+        try {
+            const res = await fetch('/api/admin/db-size');
+            const result = await res.json();
+            if (!result.success) {
+                summaryEl.innerText = 'Không thể tải dung lượng.';
+                return;
+            }
+
+            const fmtMB = (bytes) => (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+            const limitMB = (result.limit_bytes / (1024 * 1024)).toFixed(0);
+            const pct = result.percent_used;
+
+            summaryEl.innerHTML = `Đã dùng <strong>${fmtMB(result.total_bytes)}</strong> / ${limitMB} MB (<strong>${pct}%</strong>)`;
+
+            barEl.style.width = Math.min(pct, 100) + '%';
+            barEl.innerText = pct + '%';
+            barEl.className = 'progress-bar ' + (pct > 90 ? 'bg-danger' : pct > 70 ? 'bg-warning' : 'bg-success');
+        } catch (e) {
+            console.error(e);
+            summaryEl.innerText = 'Lỗi kết nối đến server.';
         }
     }
 
@@ -988,6 +1650,8 @@
                     confirmInput.value.trim().toUpperCase() !== pendingDeleteStore.toUpperCase();
             });
         }
+        // Luôn có sẵn 1 dòng nhập mã hàng trống khi mở form tạo phiếu luân chuyển.
+        addTransferItemRow();
     });
 
     async function submitDeleteStoreData() {
@@ -1102,6 +1766,13 @@
             if (v.data_version !== lastVersions.data_version) { loadData(); }
             if (v.history_version !== lastVersions.history_version) { loadHistory(); }
             if (v.inventory_version !== lastVersions.inventory_version) { loadInventory(); }
+            if (v.transfer_version !== lastVersions.transfer_version) {
+                loadTransfers();
+                // Danh sách phiếu luân chuyển đổi (đồng ý/từ chối/đổi lại/tick
+                // nhận hàng ở NGƯỜI KHÁC) -> tô màu tồn kho cũng phải cập nhật
+                // theo, ngay cả khi đang không ở tab Tồn Kho.
+                if (globalInventory.length > 0) { refreshTransferHighlights(); }
+            }
             if (isAdminUI && v.users_version !== lastVersions.users_version) { loadAdminUsers(); }
 
             lastVersions = v;
