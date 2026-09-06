@@ -7,3 +7,4 @@ gunicorn
 requests
 flask-compress
 Flask-Limiter
+orjson

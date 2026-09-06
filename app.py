@@ -1,5 +1,7 @@
 import os
 import json
+import math
+import orjson
 import traceback
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -17,6 +19,74 @@ from dotenv import load_dotenv
 
 # Nạp các biến bảo mật từ file .env
 load_dotenv()
+
+
+def _sanitize_for_json(obj):
+    """orjson tuân thủ ĐÚNG chuẩn JSON (RFC 8259): không cho phép NaN/
+    Infinity/-Infinity như module json chuẩn của Python vẫn hay "dễ dãi"
+    chấp nhận. Dữ liệu ở đây (từ pandas) rất hay có NaN cho các ô trống, nên
+    nếu không xử lý trước, orjson.dumps() sẽ ném lỗi ngay khi gặp NaN đầu
+    tiên (không đi qua được 'default' - đó là callback cho KIỂU dữ liệu lạ,
+    không phải cho GIÁ TRỊ đặc biệt như NaN của kiểu float đã biết).
+    Hàm này duyệt đệ quy dict/list, đổi NaN/Infinity -> None trước khi đưa
+    cho orjson, để dữ liệu MỚI ghi ra từ giờ luôn là JSON hợp lệ."""
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    if isinstance(obj, (float, np.floating)):
+        try:
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+        except TypeError:
+            pass
+        return float(obj)
+    return obj
+
+
+def _orjson_default(obj):
+    """orjson tự serialize sẵn hầu hết kiểu dữ liệu Python gốc kể cả
+    datetime.datetime/date, nhưng KHÔNG biết cách xử lý một số kiểu đặc thù
+    của pandas/numpy hay xuất hiện trong dữ liệu ở đây (pd.Timestamp,
+    numpy.int64...). Hàm này chỉ được gọi cho đúng những trường hợp orjson
+    "bó tay" về KIỂU dữ liệu, đóng vai trò tương đương default=str của
+    json.dumps() trước đây. Giá trị NaN/Infinity đã được _sanitize_for_json()
+    xử lý từ trước nên không cần lo ở đây nữa."""
+    if isinstance(obj, (pd.Timestamp,)):
+        return str(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    try:
+        if pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return str(obj)
+
+
+def dumps_json(obj):
+    """Thay cho json.dumps(obj, ensure_ascii=False, default=str). orjson
+    nhanh hơn json chuẩn của Python khoảng 3-10 lần cho cả dump lẫn load -
+    đáng chú ý vì các cột JSON ở đây (ds_po_json, receipt_json, row_json,
+    data_json trong bảng cache) có thể chứa tới hàng chục nghìn dòng.
+    orjson trả về bytes nên cần decode('utf-8') trước khi lưu vào cột TEXT."""
+    return orjson.dumps(_sanitize_for_json(obj), default=_orjson_default).decode('utf-8')
+
+
+def loads_json(s):
+    """Thay cho json.loads(s). Có fallback về json chuẩn: dữ liệu đã lưu
+    trong DB TỪ TRƯỚC khi đổi sang orjson có thể chứa literal NaN (json
+    chuẩn cho ghi ra, orjson thì không) - nếu orjson đọc thất bại, thử lại
+    bằng json chuẩn (vẫn đọc được NaN) thay vì crash, để không cần phải
+    migrate lại toàn bộ dữ liệu cũ đang có trong Postgres. Từ nay các lượt
+    ghi mới đều đã sạch NaN (nhờ dumps_json ở trên) nên fallback này sẽ
+    ngày càng ít được dùng tới theo thời gian, chỉ còn hữu ích cho dữ liệu
+    cũ chưa được ghi đè lại."""
+    try:
+        return orjson.loads(s)
+    except orjson.JSONDecodeError:
+        return json.loads(s)
+
 
 app = Flask(__name__)
 
@@ -109,6 +179,12 @@ def _get_pool():
     tục - biểu hiện ra ngoài là các lỗi kết nối chập chờn."""
     global _db_pool
     if _db_pool is None:
+        # Số 10 này là max PER WORKER. Trên gói Render Free (512MB RAM, CPU
+        # chia sẻ rất yếu), nên giữ --workers 1 (xem giải thích ở Start
+        # Command) - vì vậy tổng kết nối tối đa lý thuyết vẫn là 10, không
+        # cần nhân thêm. Nếu sau này nâng cấp gói và tăng số --workers, nhớ
+        # NHÂN số này với số --workers để không vượt giới hạn kết nối của
+        # Neon (vượt sẽ gây lỗi "too many connections").
         _db_pool = pg_pool.SimpleConnectionPool(1, 10, DATABASE_URL, cursor_factory=RealDictCursor)
     return _db_pool
 
@@ -224,6 +300,13 @@ def init_db():
         cursor.execute('ALTER TABLE po_detail_items ADD COLUMN IF NOT EXISTS quantity NUMERIC')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_po_detail_store ON po_detail_items(store_code)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_po_detail_upload_time ON po_detail_items(upload_time)')
+        # Index gộp (store_code, upload_time DESC): load_store_dataframes()
+        # luôn lọc theo store_code RỒI sort theo upload_time giảm dần cùng
+        # lúc - 2 index riêng ở trên chỉ giúp được 1 trong 2 việc, Postgres
+        # vẫn phải tự sort sau khi lọc. Index gộp này khớp thẳng với mẫu
+        # WHERE + ORDER BY của câu query, tránh bước sort tốn thêm khi bảng
+        # càng tích luỹ nhiều dữ liệu theo thời gian (cache miss).
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_po_detail_store_time ON po_detail_items(store_code, upload_time DESC)')
 
         # Dọn các dòng trùng lặp (Mã PO + Mã phụ tùng + Số lượng) có thể đã
         # tồn tại từ TRƯỚC KHI có cơ chế dedup ở CSDL dưới đây (chỉ giữ lại
@@ -534,7 +617,21 @@ def parse_inventory_excel(file_storage):
     nhau - trường hợp hiếm, sẽ cộng dồn số lượng lại thay vì ghi đè).
     """
     file_storage.seek(0)
-    raw = pd.read_excel(file_storage, header=None, dtype=object)
+    # engine_kwargs={'read_only': True}: yêu cầu openpyxl chỉ đọc GIÁ TRỊ ô,
+    # bỏ qua toàn bộ style/định dạng/màu sắc/border (thường rất nhiều trong
+    # file "Tổng hợp tồn kho" xuất từ hệ thống) - đây thường là phần tốn thời
+    # gian + bộ nhớ nhất khi đọc file Excel lớn bằng pandas, dù app không hề
+    # dùng tới thông tin định dạng đó. Bọc try/except vì tham số engine_kwargs
+    # chỉ có từ pandas >= 1.3 - nếu server đang chạy bản pandas cũ hơn, tự
+    # động rơi về cách đọc mặc định (chậm hơn nhưng vẫn đúng).
+    try:
+        raw = pd.read_excel(
+            file_storage, header=None, dtype=object,
+            engine='openpyxl', engine_kwargs={'read_only': True},
+        )
+    except TypeError:
+        file_storage.seek(0)
+        raw = pd.read_excel(file_storage, header=None, dtype=object)
 
     # 1) Tìm dòng header chính: ô đầu tiên (đã strip/upper) = "MÃ KHO"
     header_row = None
@@ -854,7 +951,7 @@ def save_ds_po(cursor, store_code, ds_po_file, ds_po_df, upload_time):
     """Danh sách PO: XOÁ SẠCH dữ liệu cũ của cửa hàng này và THAY THẾ hoàn
     toàn bằng dữ liệu mới. Không đụng tới dữ liệu Chi tiết nhận hàng đang có,
     để có thể tải riêng lẻ từng loại file mà không làm mất dữ liệu loại kia."""
-    ds_po_json = json.dumps(ds_po_df.to_dict(orient='records'), ensure_ascii=False, default=str)
+    ds_po_json = dumps_json(ds_po_df.to_dict(orient='records'))
 
     cursor.execute('''
         INSERT INTO latest_uploads (store_code, ds_po_filename, ds_po_json, ds_po_upload_time)
@@ -870,7 +967,7 @@ def save_receipt(cursor, store_code, receipt_file, receipt_df, upload_time):
     """Chi tiết nhận hàng: XOÁ SẠCH dữ liệu cũ của cửa hàng này và THAY THẾ
     hoàn toàn bằng dữ liệu mới. Không đụng tới dữ liệu Danh sách PO đang có,
     để có thể tải riêng lẻ từng loại file mà không làm mất dữ liệu loại kia."""
-    receipt_json = json.dumps(receipt_df.to_dict(orient='records'), ensure_ascii=False, default=str)
+    receipt_json = dumps_json(receipt_df.to_dict(orient='records'))
 
     cursor.execute('''
         INSERT INTO latest_uploads (store_code, receipt_filename, receipt_json, receipt_upload_time)
@@ -928,7 +1025,7 @@ def append_po_detail(cursor, store_code, po_detail_file, po_detail_df, upload_ti
 
     records = detail.drop(columns=['_po_code', '_part_code', '_qty']).to_dict(orient='records')
     rows_to_insert = [
-        (store_code, po, part, qty, json.dumps(rec, ensure_ascii=False, default=str), po_detail_file.filename, upload_time)
+        (store_code, po, part, qty, dumps_json(rec), po_detail_file.filename, upload_time)
         for po, part, qty, rec in zip(detail['_po_code'], detail['_part_code'], detail['_qty'], records)
     ]
 
@@ -975,8 +1072,8 @@ def load_store_dataframes(cursor, store_code):
     if not detail_rows:
         return None
 
-    ds_po_df = pd.DataFrame(json.loads(latest['ds_po_json']))
-    receipt_df = pd.DataFrame(json.loads(latest['receipt_json']))
+    ds_po_df = pd.DataFrame(loads_json(latest['ds_po_json']))
+    receipt_df = pd.DataFrame(loads_json(latest['receipt_json']))
     po_detail_df = pd.DataFrame(detail_rows, columns=['po_code', 'part_code', 'quantity'])
 
     return ds_po_df, po_detail_df, receipt_df
@@ -1002,17 +1099,20 @@ def compute_result_for_store(cursor, store_code):
 # Cache đơn giản trong bộ nhớ (RAM) của tiến trình app: /api/data trước đây
 # tính lại toàn bộ bảng đối soát (đọc JSON lớn + merge bằng pandas) MỖI LẦN
 # được gọi, kể cả khi dữ liệu không hề thay đổi giữa 2 lần gọi liên tiếp
-# (ví dụ do polling hoặc bấm refresh nhiều lần). Vì đã có sẵn cơ chế đánh
-# dấu "phiên bản dữ liệu" (data_version) dùng cho /api/version, ta tái sử
-# dụng chính giá trị đó làm khoá cache: chỉ tính lại khi có upload mới.
+# (ví dụ do polling hoặc bấm refresh nhiều lần).
+#
+# Mỗi cửa hàng giờ có version RIÊNG (xem get_all_store_data_versions), nên
+# cache lưu dạng {store_code: (version, data)} - so sánh version của ĐÚNG
+# cửa hàng đó, thay vì trước đây dùng 1 version toàn cục khiến cache của
+# TẤT CẢ cửa hàng bị xoá sạch mỗi khi bất kỳ cửa hàng nào có upload mới.
 _result_cache = {}
-_result_cache_version = None
 
 
 def get_global_data_version(cursor):
     """Trả về mốc thời gian mới nhất trong 3 nguồn dữ liệu ảnh hưởng tới
     bảng đối soát (Danh sách PO / Chi tiết nhận hàng / Chi tiết PO) ở TẤT CẢ
-    cửa hàng. Dùng chung cho /api/version và cache của /api/data."""
+    cửa hàng. CHỈ dùng cho /api/version (frontend poll giá trị này để biết
+    "có gì đó vừa đổi ở đâu đó" - không cần chi tiết đổi ở cửa hàng nào)."""
     cursor.execute('''
         SELECT GREATEST(
             COALESCE((SELECT MAX(ds_po_upload_time) FROM latest_uploads), 'epoch'::timestamp),
@@ -1021,6 +1121,45 @@ def get_global_data_version(cursor):
         ) AS v
     ''')
     return cursor.fetchone()['v']
+
+
+def get_store_data_version(cursor, store_code):
+    """Giống get_global_data_version nhưng chỉ tính cho MỘT cửa hàng. Dùng
+    khi /api/data chỉ cần bảng đối soát của 1 cửa hàng cụ thể (không phải
+    'ALL'), để tránh việc 1 cửa hàng khác vừa upload làm cache của cửa hàng
+    này bị coi là cũ một cách oan uổng."""
+    cursor.execute('''
+        SELECT GREATEST(
+            COALESCE((SELECT ds_po_upload_time FROM latest_uploads WHERE store_code = %s), 'epoch'::timestamp),
+            COALESCE((SELECT receipt_upload_time FROM latest_uploads WHERE store_code = %s), 'epoch'::timestamp),
+            COALESCE((SELECT MAX(upload_time) FROM po_detail_items WHERE store_code = %s), 'epoch'::timestamp)
+        ) AS v
+    ''', (store_code, store_code, store_code))
+    return cursor.fetchone()['v']
+
+
+def get_all_store_data_versions(cursor):
+    """Tính version RIÊNG cho từng cửa hàng trong 1 lần truy vấn (thay vì
+    gọi get_store_data_version() lặp lại cho mỗi cửa hàng - tránh N round-trip
+    tới DB khi admin xem 'ALL'). Trả về dict {store_code: version}.
+
+    Nhờ có version riêng theo từng cửa hàng, khi 1 cửa hàng upload dữ liệu
+    mới, CHỈ cache của đúng cửa hàng đó bị vô hiệu - cache của các cửa hàng
+    khác (không hề đổi gì) vẫn dùng lại được, thay vì trước đây dùng chung 1
+    version toàn cục khiến TOÀN BỘ cửa hàng đều bị tính lại mỗi khi có bất kỳ
+    upload nào xảy ra ở bất kỳ đâu."""
+    cursor.execute('''
+        SELECT store_code, MAX(ts) AS v FROM (
+            SELECT store_code, ds_po_upload_time AS ts FROM latest_uploads
+            UNION ALL
+            SELECT store_code, receipt_upload_time AS ts FROM latest_uploads
+            UNION ALL
+            SELECT store_code, upload_time AS ts FROM po_detail_items
+        ) combined
+        WHERE ts IS NOT NULL
+        GROUP BY store_code
+    ''')
+    return {r['store_code']: r['v'] for r in cursor.fetchall()}
 
 
 def compute_result_for_store_cached(cursor, store_code, version):
@@ -1033,28 +1172,28 @@ def compute_result_for_store_cached(cursor, store_code, version):
        tính lại từ đầu (đọc JSON từ DB vẫn rẻ hơn nhiều so với việc load lại
        toàn bộ Danh sách PO/Chi tiết PO/Chi tiết nhận hàng rồi merge bằng
        pandas).
-    Cả 2 tầng đều tự động vô hiệu khi "version" (mốc dữ liệu mới nhất) đổi.
+    Cả 2 tầng đều tự động vô hiệu khi "version" của ĐÚNG cửa hàng đó đổi -
+    không ảnh hưởng tới cache của các cửa hàng khác.
     """
-    global _result_cache, _result_cache_version
-    if _result_cache_version != version:
-        _result_cache = {}
-        _result_cache_version = version
-    if store_code in _result_cache:
-        return _result_cache[store_code]
-
+    global _result_cache
     version_str = str(version)
+
+    cached_entry = _result_cache.get(store_code)
+    if cached_entry is not None and cached_entry[0] == version_str:
+        return cached_entry[1]
+
     cursor.execute(
         'SELECT data_json FROM computed_cache WHERE store_code = %s AND version = %s',
         (store_code, version_str)
     )
     cached_row = cursor.fetchone()
     if cached_row:
-        data = json.loads(cached_row['data_json'])
-        _result_cache[store_code] = data
+        data = loads_json(cached_row['data_json'])
+        _result_cache[store_code] = (version_str, data)
         return data
 
     data = compute_result_for_store(cursor, store_code)
-    _result_cache[store_code] = data
+    _result_cache[store_code] = (version_str, data)
 
     # Ghi lại vào DB cho các worker khác dùng chung. Dùng try/except riêng vì
     # đây chỉ là tối ưu hiệu năng - nếu ghi cache lỗi (ví dụ race condition
@@ -1068,7 +1207,7 @@ def compute_result_for_store_cached(cursor, store_code, version):
                 version = EXCLUDED.version,
                 data_json = EXCLUDED.data_json,
                 updated_at = EXCLUDED.updated_at
-        ''', (store_code, version_str, json.dumps(data, ensure_ascii=False, default=str)))
+        ''', (store_code, version_str, dumps_json(data)))
         cursor.connection.commit()
     except Exception:
         try:
@@ -1414,11 +1553,6 @@ def get_data():
     cleanup_old_po_detail(cursor)
     db.commit()
 
-    # Lấy version dữ liệu hiện tại 1 lần, dùng làm khoá cache cho toàn bộ
-    # request này (tránh tính lại pandas merge nếu không có gì thay đổi kể
-    # từ lần gọi trước).
-    version = get_global_data_version(cursor)
-
     combined_data = []
 
     if target_store == 'ALL' and role == 'admin':
@@ -1431,12 +1565,19 @@ def get_data():
         ''')
         store_codes = [r['store_code'] for r in cursor.fetchall()]
 
+        # Lấy version của TỪNG cửa hàng trong 1 lần truy vấn duy nhất, để
+        # cache của cửa hàng A không bị coi là "cũ" chỉ vì cửa hàng B vừa
+        # upload dữ liệu mới (xem chi tiết ở get_all_store_data_versions()).
+        versions_by_store = get_all_store_data_versions(cursor)
+
         for sc in store_codes:
-            items = compute_result_for_store_cached(cursor, sc, version)
+            sc_version = versions_by_store.get(sc, 'epoch')
+            items = compute_result_for_store_cached(cursor, sc, sc_version)
             for itm in items:
                 itm['store_code'] = sc
                 combined_data.append(itm)
     else:
+        version = get_store_data_version(cursor, target_store)
         items = compute_result_for_store_cached(cursor, target_store, version)
         for itm in items:
             itm['store_code'] = target_store
