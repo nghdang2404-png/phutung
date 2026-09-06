@@ -524,7 +524,6 @@
                 <button type="button" class="btn btn-outline-primary btn-sm mt-1" onclick="addTransferItemRow()">
                     <i class="bi bi-plus-lg me-1"></i>Thêm Mã Hàng
                 </button>
-                <datalist id="transfer-part-list"></datalist>
 
                 <div class="mt-3 d-flex flex-column flex-md-row justify-content-between align-items-stretch align-items-md-center gap-2">
                     <button type="button" class="btn btn-outline-secondary fw-semibold" onclick="document.getElementById('transfer-excel-file').click()">
@@ -539,7 +538,52 @@
             </div>
             {% endif %}
 
+            <!-- Datalist gợi ý mã hàng dùng chung cho cả form Store và form Admin -->
+            <datalist id="transfer-part-list"></datalist>
+
             {% if role == 'admin' %}
+            <div class="card card-custom p-3 p-md-4 mb-3 mb-md-4">
+                <h5 class="fw-bold mb-3 fs-6 fs-md-5"><i class="bi bi-send-plus-fill me-2 text-primary"></i>Admin Tạo Phiếu Luân Chuyển Giữa 2 Cửa Hàng</h5>
+                <div class="row g-2 g-md-3">
+                    <div class="col-12 col-md-4">
+                        <label class="form-label fw-semibold small mb-1 text-secondary">Cửa hàng nhận</label>
+                        <select id="admin-transfer-from-store" class="form-select border-primary-subtle">
+                            <option value="">-- Chọn cửa hàng --</option>
+                            {% for s in ['NS1', 'NS2', 'NS3', 'NS4', 'NS5', 'NSM1'] %}
+                            <option value="{{ s }}">Cửa hàng {{ s }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label fw-semibold small mb-1 text-secondary">Cửa hàng cho</label>
+                        <select id="admin-transfer-to-store" class="form-select border-primary-subtle">
+                            <option value="">-- Chọn cửa hàng --</option>
+                            {% for s in ['NS1', 'NS2', 'NS3', 'NS4', 'NS5', 'NSM1'] %}
+                            <option value="{{ s }}">Cửa hàng {{ s }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label fw-semibold small mb-1 text-secondary">Ghi chú (không bắt buộc):</label>
+                        <input type="text" id="admin-transfer-note" class="form-control" placeholder="Ví dụ: điều phối theo yêu cầu quản lý...">
+                    </div>
+                </div>
+
+                <hr class="my-3">
+                <label class="form-label fw-semibold small mb-2 text-secondary">Danh sách mã hàng (1 phiếu có thể chứa nhiều mã hàng):</label>
+                <div id="admin-transfer-item-rows"></div>
+                <button type="button" class="btn btn-outline-primary btn-sm mt-1" onclick="addAdminTransferItemRow()">
+                    <i class="bi bi-plus-lg me-1"></i>Thêm Mã Hàng
+                </button>
+
+                <div class="mt-3 d-flex justify-content-end">
+                    <button type="button" class="btn btn-primary fw-semibold px-4" onclick="submitAdminTransferRequest()">
+                        <i class="bi bi-send-fill me-2"></i>Tạo Phiếu
+                    </button>
+                </div>
+                <p class="text-muted small mt-2 mb-0"><i class="bi bi-exclamation-circle me-1"></i>Phiếu tạo ra sẽ hiện ở mục "Phiếu Tôi Đã Gửi" của cửa hàng xuất, và "Phiếu Cửa Hàng Khác Gửi Đến" của cửa hàng nhận, giống hệt như khi 2 cửa hàng tự thao tác với nhau.</p>
+            </div>
+
             <div class="card card-custom p-3 mb-3 mb-md-4">
                 <div class="row align-items-center">
                     <div class="col-12 col-md-4">
@@ -564,8 +608,8 @@
                         <thead>
                             <tr>
                                 <th class="text-center">ID</th>
-                                <th>Từ Cửa Hàng</th>
-                                <th>Đến Cửa Hàng</th>
+                                <th>Cửa Hàng Xin</th>
+                                <th>Cửa Hàng Nhận</th>
                                 <th>Mã Hàng (SL)</th>
                                 <th>Trạng Thái</th>
                                 <th>Ghi Chú / Lý Do</th>
@@ -1274,6 +1318,79 @@
         return items;
     }
 
+    // ---- Bản dành cho Admin: tạo phiếu hộ giữa 2 cửa hàng bất kỳ ----
+    let adminTransferRowSeq = 0;
+
+    function addAdminTransferItemRow(partCode, quantity) {
+        const wrap = document.getElementById('admin-transfer-item-rows');
+        if (!wrap) return;
+        const rid = ++adminTransferRowSeq;
+        const row = document.createElement('div');
+        row.className = 'row g-2 align-items-center mb-2';
+        row.id = `admin-transfer-row-${rid}`;
+        row.innerHTML = `
+            <div class="col-7 col-md-6">
+                <input list="transfer-part-list" class="form-control admin-transfer-row-part" placeholder="Nhập hoặc chọn mã hàng..." value="${escapeHtmlAttr(partCode || '')}">
+            </div>
+            <div class="col-3 col-md-3">
+                <input type="number" class="form-control admin-transfer-row-qty" min="1" step="1" placeholder="SL" value="${quantity || ''}">
+            </div>
+            <div class="col-2 col-md-3 text-end">
+                <button type="button" class="btn btn-outline-danger btn-sm" onclick="document.getElementById('admin-transfer-row-${rid}').remove()"><i class="bi bi-trash3"></i></button>
+            </div>
+        `;
+        wrap.appendChild(row);
+    }
+
+    function collectAdminTransferItemRows() {
+        const rows = Array.from(document.querySelectorAll('#admin-transfer-item-rows > div'));
+        const items = [];
+        for (const row of rows) {
+            const partCode = row.querySelector('.admin-transfer-row-part').value.trim();
+            const qty = row.querySelector('.admin-transfer-row-qty').value;
+            if (!partCode && !qty) continue; // dòng trống, bỏ qua
+            items.push({ part_code: partCode, part_name: findInventoryPartName(partCode), quantity: qty });
+        }
+        return items;
+    }
+
+    async function submitAdminTransferRequest() {
+        const fromStore = document.getElementById('admin-transfer-from-store').value;
+        const toStore = document.getElementById('admin-transfer-to-store').value;
+        const note = document.getElementById('admin-transfer-note').value.trim();
+        const items = collectAdminTransferItemRows();
+
+        if (!fromStore || !toStore) { alert('Vui lòng chọn đủ cửa hàng xuất và cửa hàng nhận.'); return; }
+        if (fromStore === toStore) { alert('Cửa hàng xuất và cửa hàng nhận không được trùng nhau.'); return; }
+        if (items.length === 0) { alert('Vui lòng thêm ít nhất 1 mã hàng.'); return; }
+        for (const it of items) {
+            if (!it.part_code) { alert('Vui lòng nhập đầy đủ mã hàng cho mọi dòng.'); return; }
+            if (!it.quantity || Number(it.quantity) <= 0) { alert(`Vui lòng nhập số lượng hợp lệ cho mã hàng "${it.part_code}".`); return; }
+        }
+
+        try {
+            const res = await fetch('/api/admin/transfer/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ from_store: fromStore, to_store: toStore, note: note, items: items })
+            });
+            const result = await res.json();
+            if (res.ok && result.success) {
+                document.getElementById('admin-transfer-from-store').value = '';
+                document.getElementById('admin-transfer-to-store').value = '';
+                document.getElementById('admin-transfer-note').value = '';
+                document.getElementById('admin-transfer-item-rows').innerHTML = '';
+                addAdminTransferItemRow();
+                loadTransfers();
+            } else {
+                alert('Lỗi: ' + (result.error || 'Không thể tạo phiếu.'));
+            }
+        } catch (e) {
+            console.error(e);
+            alert('Lỗi kết nối đến server.');
+        }
+    }
+
     async function submitTransferRequest() {
         const toStore = document.getElementById('transfer-to-store').value;
         const note = document.getElementById('transfer-note').value.trim();
@@ -1652,6 +1769,7 @@
         }
         // Luôn có sẵn 1 dòng nhập mã hàng trống khi mở form tạo phiếu luân chuyển.
         addTransferItemRow();
+        addAdminTransferItemRow();
     });
 
     async function submitDeleteStoreData() {

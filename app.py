@@ -1964,6 +1964,46 @@ def transfer_create():
     return jsonify({'success': True, 'id': new_id, 'item_count': len(items)})
 
 
+@app.route('/api/admin/transfer/create', methods=['POST'])
+def admin_transfer_create():
+    """Admin tạo hộ 1 phiếu luân chuyển giữa 2 cửa hàng bất kỳ - admin tự
+    chọn cả cửa hàng XUẤT (from_store, bên sẽ nhận hàng) lẫn cửa hàng NHẬN
+    YÊU CẦU (to_store, bên sẽ gửi hàng đi). Sau khi tạo, phiếu này hiển thị
+    y hệt như phiếu do chính 2 cửa hàng đó tự tạo/nhận - từ_store thấy ở
+    mục "Phiếu Tôi Đã Gửi", to_store thấy ở mục "Phiếu Cửa Hàng Khác Gửi
+    Đến"."""
+    if 'user' not in session or session['role'] != 'admin':
+        return jsonify({'error': 'Forbidden'}), 403
+
+    data = request.json or {}
+    from_store = (data.get('from_store') or '').strip().upper()
+    to_store = (data.get('to_store') or '').strip().upper()
+    note = (data.get('note') or '').strip() or None
+
+    items, err = _clean_transfer_items(data.get('items'))
+    if err:
+        return jsonify({'error': err}), 400
+
+    if not from_store or not to_store:
+        return jsonify({'error': 'Vui lòng chọn đủ cả cửa hàng xuất và cửa hàng nhận.'}), 400
+    if to_store == from_store:
+        return jsonify({'error': 'Cửa hàng xuất và cửa hàng nhận không được trùng nhau.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+
+    valid_stores = _valid_store_codes(cursor)
+    if from_store not in valid_stores or to_store not in valid_stores:
+        cursor.close()
+        return jsonify({'error': 'Cửa hàng không hợp lệ.'}), 400
+
+    new_id = _create_transfer_request(cursor, from_store, to_store, note, session['user'], items)
+    db.commit()
+    cursor.close()
+
+    return jsonify({'success': True, 'id': new_id, 'item_count': len(items)})
+
+
 @app.route('/api/transfer/import-excel', methods=['POST'])
 def transfer_import_excel():
     """Cửa hàng tạo 1 phiếu xin luân chuyển bằng cách IMPORT danh sách mã
